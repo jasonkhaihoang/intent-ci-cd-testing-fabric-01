@@ -1,0 +1,7 @@
+id,name,type,industry,billingcity,billingstate,billingcountry,ownerid,isdeleted,createddate,lastmodifieddate
+A001,Acme Corp,Customer,Technology,San Francisco,CA,US,U001,false,2024-01-15 00:00:00,2024-01-15 00:00:00
+A002,Globex Inc,Prospect,Finance,New York,NY,US,U002,false,2024-01-20 00:00:00,2024-01-20 00:00:00
+A003,Initech LLC,Customer,Retail,Austin,TX,US,U001,false,2024-02-01 00:00:00,2024-02-01 00:00:00
+A004,Umbrella Corp,Prospect,Healthcare,Seattle,WA,US,U003,false,2024-02-15 00:00:00,2024-02-15 00:00:00
+A005,Soylent Inc,Customer,Manufacturing,Chicago,IL,US,U004,false,2024-03-01 00:00:00,2024-03-01 00:00:00
+A006,Deleted Corp,Prospect,Technology,Boston,MA,US,U002,true,2024-03-10 00:00:00,2024-03-10 00:00:00
