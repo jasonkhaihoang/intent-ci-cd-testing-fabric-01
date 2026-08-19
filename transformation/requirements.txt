@@ -1,0 +1,18 @@
+# Studio-owned Fabric project manifest (VD-3794) — read by CI and by any Fabric
+# runtime that installs the project's dependencies. The agent-server image
+# pre-installs these into the intent's runtime, so the agent does not pip install
+# during a build.
+#
+# The ephemeral_dev target's credential_class
+# (vibedata_studio_azure_cred_broker.StudioAzureCredBroker) is provided by the
+# agent-server image, NOT this manifest — do not add it here.
+#
+# No notebook-runner package: the seeded infra/dbt runner this once accompanied
+# was superseded by per-domain orchestration/<name>.Notebook/ artifacts
+# (VD-3969), and its dependency belongs with that artifact, not with the project.
+dbt-core>=1.7,<2.0
+dbt-fabricspark>=1.12.2
+dlt[duckdb,filesystem]>=1.5
+deltalake>=0.18
+pandas>=2.0
+pyarrow>=15.0

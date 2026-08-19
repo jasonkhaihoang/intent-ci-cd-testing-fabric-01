@@ -1,0 +1,1744 @@
+# Ephemeral Fabric CI Workflow
+#
+# Self-contained — all scripts live in .github/scripts/ within this repo.
+# Domain configuration: .workflow/ci-config.yml.
+#
+# Authentication: GitHub OIDC — per-domain SPN, no credentials stored (AC-31).
+# Required GitHub Variables/Secrets: see ci-config.yml's *_VAR indirection keys
+# (ADR 0018) — this workflow no longer hardcodes their literal names.
+
+name: Ephemeral Fabric CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed, auto_merge_enabled, auto_merge_disabled]
+    branches: [main]
+
+concurrency:
+  group: ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write   # required for GitHub OIDC → Azure login
+  statuses: write   # required for intent-based commit status posting
+
+env:
+  PYTHON_VERSION: "3.11"
+  SCRIPTS: .github/scripts
+
+jobs:
+  # ─── PREFLIGHT ────────────────────────────────────────────────────────────
+  # Auto-rebases branch onto main if behind, then parses ci-config.yml.
+  # Uses KV UAMI to fetch App credentials for the force-push token; no Fabric UAMI needed.
+  preflight:
+    name: "ci/preflight: intent + config"
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      domain: ${{ steps.preflight.outputs.domain }}
+      prod_workspace_id: ${{ steps.preflight.outputs.prod_workspace_id }}
+      prod_workspace_name: ${{ steps.preflight.outputs.prod_workspace_name }}
+      prod_lakehouse_id: ${{ steps.preflight.outputs.prod_lakehouse_id }}
+      prod_lakehouse_name: ${{ steps.preflight.outputs.prod_lakehouse_name }}
+      ci_target: ${{ steps.preflight.outputs.ci_target }}
+      intent_slug: ${{ steps.preflight.outputs.intent_slug }}
+      ephemeral_name: ${{ steps.names.outputs.ephemeral_name }}
+      azure_tenant_id_var: ${{ steps.preflight.outputs.AZURE_TENANT_ID_VAR }}
+      azure_client_id_var: ${{ steps.preflight.outputs.AZURE_CLIENT_ID_VAR }}
+      fabric_capacity_id_var: ${{ steps.preflight.outputs.FABRIC_CAPACITY_ID_VAR }}
+      llm_api_key_var: ${{ steps.preflight.outputs.LLM_API_KEY_VAR }}
+      llm_api_url_var: ${{ steps.preflight.outputs.LLM_API_URL_VAR }}
+      llm_model_var: ${{ steps.preflight.outputs.LLM_MODEL_VAR }}
+      entra_id_domain_var: ${{ steps.preflight.outputs.ENTRA_ID_DOMAIN_VAR }}
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Emit ci/preflight pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "pending",
+              "Preflight: validating intent + config",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Check branch sync
+        id: sync
+        if: vars.FAKE_WORLD == ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BEHIND=$(gh api \
+            "repos/${{ github.repository }}/compare/main...${{ github.event.pull_request.head.sha }}" \
+            --jq '.behind_by' 2>/dev/null || echo "0")
+          echo "behind_by=${BEHIND}" >> "$GITHUB_OUTPUT"
+
+          CONFLICT_FILES=""
+          if [ "${BEHIND:-0}" -gt 0 ] 2>/dev/null; then
+            git fetch origin main --quiet || true
+            MERGE_OUT=$(git merge-tree HEAD origin/main 2>&1) || true
+            CONFLICT_FILES=$(echo "${MERGE_OUT}" | awk '/^CONFLICT \(content\): Merge conflict in /{printf "%s%s",(NR==1?"":","),(  $NF)}')
+          fi
+          echo "conflict_files=${CONFLICT_FILES}" >> "$GITHUB_OUTPUT"
+
+      - name: Run preflight checks
+        id: preflight
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/preflight.py \
+            --branch-name "${{ github.head_ref }}" \
+            --behind-by "${{ steps.sync.outputs.behind_by || '0' }}" \
+            --conflict-files "${{ steps.sync.outputs.conflict_files }}" \
+            --ci-config-path "$CICFG" \
+            --output reports/preflight.json \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Compute ephemeral workspace name
+        id: names
+        run: |
+          REPO=$(echo "${{ github.event.repository.name }}" | tr '-' '_')
+          NAME="vibedata_ephemeral_${REPO}_${{ github.event.pull_request.number }}"
+          echo "ephemeral_name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "Ephemeral workspace name: ${NAME}"
+
+      - name: Post preflight comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render, pr_comment
+          try:
+              with open("reports/preflight.json") as f:
+                  result = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              result = None
+          body = notify_render.render_preflight_comment(result)
+          pr_comment.upsert("<!-- ci-preflight -->", body, os.environ["PR_NUMBER"], os.environ["GITHUB_REPOSITORY"])
+          EOF
+
+      - name: Emit ci/preflight success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "success",
+              "Preflight passed",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Emit ci/preflight failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/preflight",
+              "failure",
+              "Preflight failed — see PR comment",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── ADR NUMBERING ────────────────────────────────────────────────────────
+  # Standalone check: fails the PR if docs/adr/ has duplicate leading numbers, or
+  # any ADR-00NN citation under docs/** has no matching file. No `needs:` — this
+  # check is independent of preflight and every other gate.
+  adr-numbering:
+    name: "ci/adr-numbering: ADR number + reference check"
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Emit ci/adr-numbering pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "pending",
+              "Checking ADR numbering + cross-references",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Run ADR numbering check
+        run: python3 ${{ env.SCRIPTS }}/adr_lint.py
+
+      - name: Emit ci/adr-numbering success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "success",
+              "No duplicate ADR numbers or dangling references",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Emit ci/adr-numbering failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/adr-numbering",
+              "failure",
+              "ADR numbering check failed — see job log",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── FETCH PROD STATE ────────────────────────────────────────────────────────
+  # Downloads prod-state/manifest.json for Slim CI deferral.
+  # Modes: artifact (gh run download from CD), onelake (Fabric UAMI), greenfield (dbt parse fallback).
+  fetch-prod-state:
+    name: "ci/state-modified+: fetch prod state"
+    if: github.event.action != 'closed'
+    needs: preflight
+    runs-on: ubuntu-latest
+    outputs:
+      greenfield_fallback: ${{ steps.fetch.outputs.greenfield_fallback }}
+      platform_error_mode: ${{ steps.fetch.outputs.mode }}
+      platform_error_category: ${{ steps.fetch.outputs.category }}
+      platform_error_reason: ${{ steps.fetch.outputs.reason }}
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      - run: pip install pyyaml "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Emit Gate 1 pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/state-modified+",
+              "pending",
+              "Gate 1: fetching prod state",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Parse prod manifest mode
+        id: parse-mode
+        run: |
+          python3 - <<'EOF'
+          import yaml, os, sys
+          try:
+            with open(os.environ.get("CICFG", ".workflow/ci-config.yml")) as f:
+              c = yaml.safe_load(f) or {}
+            mode = (c.get("VD_DOMAIN_PROD_MANIFEST_SOURCE") or {}).get("mode", "artifact")
+          except Exception:
+            mode = "artifact"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+            out.write(f"mode={mode}\n")
+          print(f"prod_manifest_source.mode={mode}")
+          EOF
+
+      - name: Login — per-domain SPN (onelake mode only)
+        if: steps.parse-mode.outputs.mode == 'onelake' && vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      # VD-3225: E2E error-injection seam for onelake-mode fetch-failure
+      # classification. Inert unless the `E2E_ONELAKE_ERROR_INJECT` repo
+      # variable is explicitly set — every real domain repo leaves it unset,
+      # so this step is a no-op there. Test-only.
+      - name: E2E onelake error injection (test-only)
+        if: steps.parse-mode.outputs.mode == 'onelake' && vars.E2E_ONELAKE_ERROR_INJECT != ''
+        run: |
+          SCENARIO="${{ vars.E2E_ONELAKE_ERROR_INJECT }}"
+          echo "E2E error injection active: scenario=$SCENARIO"
+          case "$SCENARIO" in
+            401|403|500)
+              cat > /tmp/onelake_stub_server.py <<'PYEOF'
+          import http.server, sys
+          STATUS = int(sys.argv[1])
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(STATUS)
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  self.wfile.write(b'{"error":"injected"}')
+              def log_message(self, *a):
+                  pass
+          http.server.HTTPServer(("127.0.0.1", 8899), Handler).serve_forever()
+          PYEOF
+              nohup python3 /tmp/onelake_stub_server.py "$SCENARIO" >/tmp/onelake_stub.log 2>&1 &
+              for i in $(seq 1 20); do
+                python3 -c "import socket; socket.create_connection(('127.0.0.1', 8899), timeout=0.5).close()" 2>/dev/null && break
+                sleep 0.25
+              done
+              echo "ONELAKE_DFS_BASE_URL=http://127.0.0.1:8899" >> "$GITHUB_ENV"
+              ;;
+            az_auth_fail)
+              mkdir -p /tmp/az_shim
+              cat > /tmp/az_shim/az <<'SHEOF'
+          #!/usr/bin/env bash
+          echo "az: injected auth failure (E2E test)" >&2
+          exit 1
+          SHEOF
+              chmod +x /tmp/az_shim/az
+              echo "/tmp/az_shim" >> "$GITHUB_PATH"
+              ;;
+            *)
+              echo "ERROR: unknown E2E_ONELAKE_ERROR_INJECT scenario '$SCENARIO' — expected one of 401|403|500|az_auth_fail" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Fetch prod state
+        id: fetch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: python3 ${{ env.SCRIPTS }}/fetch_prod_state.py
+
+      - name: Upload prod-state artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: prod-state-pr${{ github.event.pull_request.number }}
+          path: prod-state/
+          retention-days: 7
+
+      - name: Parse dbt project
+        # VD-4541: explicit dbt parse before manifest emission, so target/manifest.json
+        # exists by construction here rather than as an implicit side effect of
+        # emit_deployment_manifest.py's internal run_dbt_ls() subprocess call.
+        if: steps.fetch.outcome == 'success'
+        run: |
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+
+      - name: Emit deployment manifest
+        # Emit per-head-SHA deployment manifest here (in fetch-prod-state) so the
+        # design-drift job can download it before provision-workspace runs.
+        if: steps.fetch.outcome == 'success'
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/emit_deployment_manifest.py
+
+      - name: Upload deployment manifest GHA artifact
+        if: steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Show modified set
+        # VD-2175: surface the `state:modified+` closure inline in Gate 1 logs so
+        # developers don't need to dig into the deployment manifest to see what changed.
+        if: always() && steps.fetch.outputs.greenfield_fallback != 'true' && hashFiles('prod-state/manifest.json') != ''
+        run: |
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile 2>&1 | tail -3 || true
+          modified=$(dbt ls --select state:modified+ --state prod-state \
+                       --project-dir "$PROJ" \
+                       --profiles-dir .github/profiles --target dbt_fabric_compile \
+                       --output name 2>/dev/null | grep -v '^\(Running\|Found\|Update\)' || true)
+          echo "::group::state:modified+ closure"
+          if [ -z "$modified" ]; then
+            echo "::notice title=state:modified+::(empty — no models changed vs prod baseline)"
+          else
+            while IFS= read -r m; do
+              [ -n "$m" ] && echo "::notice title=state:modified+::state:modified+ => $m"
+            done <<< "$modified"
+          fi
+          echo "::endgroup::"
+
+      - name: Emit Gate 1 final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              state, desc = "success", "Gate 1: prod state resolved"
+          else:
+              state, desc = "failure", f"Gate 1: failed — see {run_url}"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/state-modified+",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  # ─── GATE 1 COMMENT ──────────────────────────────────────────────────────────
+  # Posts the ci/state-modified+ PR comment (closure table, or Mode/Category/
+  # Reason on platform error). Decoupled from provision-workspace, which
+  # `needs: fetch-prod-state` and is entirely skipped on a Gate 1 failure — a
+  # step-level `if: always()` inside a skipped job never runs. This job needs
+  # only `fetch-prod-state` and carries its own `if: always()`, so the
+  # structured comment posts on every outcome, including a platform error.
+  # (VD-3225: found live — AC-14's comment never posted on any Gate 1 failure
+  # before this fix, artifact mode included.)
+  gate-1-comment:
+    name: "ci/state-modified+: post comment"
+    # Fires only when fetch-prod-state actually concluded (success or failure) —
+    # not when it was itself skipped by an upstream preflight failure, which
+    # already gets its own ci/preflight comment and has nothing to do with
+    # state-modified+ resolution.
+    if: always() && (needs.fetch-prod-state.result == 'success' || needs.fetch-prod-state.result == 'failure') && github.event.action != 'closed'
+    needs: [preflight, fetch-prod-state]
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Download deployment manifest artifact
+        if: needs.fetch-prod-state.result == 'success'
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+        continue-on-error: true
+
+      - name: Post gate-1 comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GREENFIELD_FALLBACK: ${{ needs.fetch-prod-state.outputs.greenfield_fallback }}
+          PLATFORM_ERROR_MODE: ${{ needs.fetch-prod-state.outputs.platform_error_mode }}
+          PLATFORM_ERROR_CATEGORY: ${{ needs.fetch-prod-state.outputs.platform_error_category }}
+          PLATFORM_ERROR_REASON: ${{ needs.fetch-prod-state.outputs.platform_error_reason }}
+          GATE1_JOB_STATUS: ${{ needs.fetch-prod-state.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          SCRIPTS_DIR: ${{ env.SCRIPTS }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, os.environ["GITHUB_WORKSPACE"] + "/" + os.environ["SCRIPTS_DIR"])
+          import notify_render, pr_comment
+          greenfield = os.environ.get("GREENFIELD_FALLBACK", "false").lower() == "true"
+          passed = os.environ.get("GATE1_JOB_STATUS", "failure").lower() == "success"
+          category = os.environ.get("PLATFORM_ERROR_CATEGORY", "")
+          platform_error = None
+          if category:
+              platform_error = {
+                  "mode": os.environ.get("PLATFORM_ERROR_MODE", "artifact"),
+                  "category": category,
+                  "reason": os.environ.get("PLATFORM_ERROR_REASON", ""),
+              }
+          head_sha = os.environ.get("HEAD_SHA", "")
+          closure = []
+          try:
+              manifest_path = f"reports/deployment-manifest-{head_sha}.json"
+              with open(manifest_path) as f:
+                  dm = json.load(f)
+              for a in dm.get("artifacts", []):
+                  closure.append({
+                      "name": a.get("name", "").split(".")[-1],
+                      "materialization": a.get("materialized", "unknown"),
+                      "closure_source": a.get("closure_source", "descendant"),
+                  })
+          except (FileNotFoundError, json.JSONDecodeError):
+              closure = []
+          body = notify_render.render_gate_1_comment(
+              closure,
+              greenfield=greenfield,
+              passed=passed,
+              platform_error=platform_error,
+          )
+          pr_comment.upsert(notify_render.GATE_1_MARKER, body, os.environ["PR_NUMBER"], os.environ["REPO"])
+          EOF
+
+  # ─── DESIGN DRIFT ────────────────────────────────────────────────────────────
+  # Runner-side LLM gate: compares intent/<intent-id>/design.md against state:modified.
+  # Hard DAG gate: provision-workspace needs this job so a drift failure short-circuits
+  # the ephemeral workspace + Spark provision before any compute is spent (AC-8).
+  design-drift:
+    name: "ci/design-drift: design.md vs state:modified"
+    needs: [preflight, fetch-prod-state]
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      - run: pip install pyyaml "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Emit ci/design-drift pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/design-drift",
+              "pending",
+              "Gate: design-drift running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Write modified.json from deployment manifest
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import json, os
+          head_sha = os.environ["HEAD_SHA"]
+          with open(f"reports/deployment-manifest-{head_sha}.json") as f:
+              dm = json.load(f)
+          names = [a["name"].split(".")[-1] for a in dm.get("artifacts", [])]
+          with open("reports/modified.json", "w") as f:
+              json.dump(names, f)
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+
+      - name: Run design-drift gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          LLM_API_KEY: ${{ secrets[needs.preflight.outputs.llm_api_key_var] }}
+          LLM_API_URL: ${{ vars[needs.preflight.outputs.llm_api_url_var] }}
+          LLM_MODEL: ${{ vars[needs.preflight.outputs.llm_model_var] }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/design_drift_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json" \
+            --modified   "reports/modified.json"
+
+      - name: Emit ci/design-drift final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/design-drift",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── PROVISION ────────────────────────────────────────────────────────────
+  # 1. KV UAMI: fetch Fabric capacity ID + GitHub App config → GITHUB_ENV
+  # 2. Fabric UAMI: find-or-create workspace + lakehouse, inject notebook
+  # ─── ORCHESTRATION ──────────────────────────────────────────────────────────
+  # Validates the optional `## Schedule` design-contract section in intent/<slug>/design.md.
+  # Platform-neutral: cron/DAG/selector resolution only — does not deploy schedules.
+  orchestration:
+    name: "ci/orchestration: schedule design contract"
+    if: github.event.action != 'closed'
+    needs: [preflight, design-drift]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      - run: pip install pyyaml "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Emit ci/orchestration pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/orchestration",
+              "pending",
+              "Gate: orchestration running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+
+      - name: Run orchestration gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/orchestration_gate_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json"
+
+      - name: Emit ci/orchestration final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/orchestration",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  # ─── SEMANTIC-MODEL ─────────────────────────────────────────────────────────
+  # Validates the optional `## Semantic Model` design-contract section against the dbt
+  # MetricFlow objects in manifest.json. Static only — no live MetricFlow query runtime check.
+  semantic-model:
+    name: "ci/semantic-model: dbt MetricFlow design contract"
+    if: github.event.action != 'closed'
+    needs: [preflight, design-drift]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      statuses: write
+      pull-requests: write
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      - run: pip install pyyaml "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Emit ci/semantic-model pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/semantic-model",
+              "pending",
+              "Gate: semantic-model running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Parse dbt project
+        run: |
+          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+
+      - name: Run semantic-model gate
+        id: run-gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/semantic_model_gate_runner.py \
+            --pr-number  "${{ github.event.pull_request.number }}" \
+            --head-sha   "${{ github.event.pull_request.head.sha }}" \
+            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --manifest   "$PROJ/target/manifest.json"
+
+      - name: Emit ci/semantic-model final-status failure
+        if: failure() && steps.run-gate.conclusion != 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/semantic-model",
+              "failure",
+              "Gate failed before runner started: see job logs",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+  provision-workspace:
+    name: "Provision workspace, environment, shortcuts, notebook"
+    if: github.event.action != 'closed'
+    needs: [preflight, fetch-prod-state, design-drift, orchestration, semantic-model]
+    runs-on: ubuntu-latest
+    outputs:
+      ephemeral_workspace_id: ${{ steps.provision.outputs.workspace_id }}
+      ephemeral_lakehouse_id: ${{ steps.provision.outputs.lakehouse_id }}
+      lakehouse_name: ${{ steps.provision.outputs.lakehouse_name }}
+      interactive_notebook_id: ${{ steps.generate-notebook.outputs.interactive_notebook_id }}
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Login — per-domain SPN
+        if: vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      - name: Emit ci/provision pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/provision",
+              "pending",
+              "Provision workspace, environment, shortcuts, notebook",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: Cancel in-flight jobs
+        env:
+          EPHEMERAL_NAME: ${{ needs.preflight.outputs.ephemeral_name }}
+        run: python3 ${{ env.SCRIPTS }}/fabric_api.py cancel-running-jobs --name "$EPHEMERAL_NAME"
+
+      - name: Provision ephemeral workspace and lakehouse
+        id: provision
+        env:
+          EPHEMERAL_NAME: ${{ needs.preflight.outputs.ephemeral_name }}
+          FABRIC_CAPACITY_ID: ${{ vars[needs.preflight.outputs.fabric_capacity_id_var] }}
+        run: python3 ${{ env.SCRIPTS }}/fabric_api.py provision --name "$EPHEMERAL_NAME"
+
+      - name: Create Fabric Environment from bundle
+        id: create-environment
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py create-environment \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --config .github/environment/ephemeral-ci-environment.yaml \
+            --ci-config "${{ env.CICFG }}"
+
+      - name: Publish Fabric Environment (Full Mode)
+        id: publish-environment
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py publish-environment \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --environment-id "${{ steps.create-environment.outputs.environment_id }}"
+
+      - name: Set Environment as workspace default
+        id: set-workspace-default
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py set-workspace-default-environment \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --environment-name "${{ steps.create-environment.outputs.environment_name }}" \
+            --runtime-version "${{ steps.create-environment.outputs.runtime_version }}"
+
+      - name: Add PR author as Admin on ephemeral workspace
+        env:
+          ENTRA_ID_DOMAIN: ${{ vars[needs.preflight.outputs.entra_id_domain_var] }}
+          ENTRA_ID_UPN_OVERRIDE: ${{ secrets.ENTRA_ID_UPN_OVERRIDE }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py add-contributor \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --github-login "${{ github.event.pull_request.user.login }}" \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}" \
+            --role Admin
+
+      - name: Download prod-state artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: prod-state-pr${{ github.event.pull_request.number }}
+          path: prod-state/
+        continue-on-error: true
+
+      - name: Upload prod-state manifest to ephemeral workspace OneLake
+        id: upload-prod-state
+        run: |
+          if [ -f prod-state/manifest.json ]; then
+            python3 ${{ env.SCRIPTS }}/fabric_api.py upload-file \
+              --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+              --lakehouse-id "${{ steps.provision.outputs.lakehouse_id }}" \
+              --local-path prod-state/manifest.json \
+              --remote-path Files/ci-artifacts/prod-state/manifest.json
+          else
+            echo "No prod-state/manifest.json found — skipping OneLake upload."
+          fi
+
+      - name: Upload prod-state-defer manifest to ephemeral workspace OneLake
+        run: |
+          if [ -f prod-state/manifest_prod.json ]; then
+            python3 ${{ env.SCRIPTS }}/fabric_api.py upload-file \
+              --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+              --lakehouse-id "${{ steps.provision.outputs.lakehouse_id }}" \
+              --local-path prod-state/manifest_prod.json \
+              --remote-path Files/ci-artifacts/prod-state-defer/manifest.json
+          else
+            echo "No prod-state/manifest_prod.json found — skipping prod-state-defer upload."
+          fi
+
+      - name: Install dbt and parse current branch
+        run: |
+          pip install "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+          dbt deps --project-dir "$PROJ" --quiet
+          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet
+
+      - name: Derive shortcuts from manifest
+        id: derive-shortcuts
+        env:
+          PROD_WORKSPACE_ID: ${{ needs.preflight.outputs.prod_workspace_id }}
+          PROD_LAKEHOUSE_ID: ${{ needs.preflight.outputs.prod_lakehouse_id }}
+        run: |
+          mkdir -p reports
+          python3 ${{ env.SCRIPTS }}/derive_shortcuts.py --output shortcuts.json
+
+      - name: Seed shortcuts in ephemeral lakehouse
+        id: seed-shortcuts
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py seed-shortcuts \
+            --from-file shortcuts.json \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --lakehouse-id "${{ steps.provision.outputs.lakehouse_id }}"
+
+      - name: Emit deployment manifest
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 ${{ env.SCRIPTS }}/emit_deployment_manifest.py
+
+      - name: Upload deployment manifest to ephemeral OneLake
+        run: |
+          python3 ${{ env.SCRIPTS }}/fabric_api.py upload-file \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --lakehouse-id "${{ steps.provision.outputs.lakehouse_id }}" \
+            --local-path "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json" \
+            --remote-path "Files/ci-artifacts/deployment-manifest-${{ github.event.pull_request.head.sha }}.json"
+
+      - name: Upload deployment manifest GHA artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload shortcut seeding report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-reports-shortcuts-pr${{ github.event.pull_request.number }}
+          path: reports/shortcut_seeding.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Zip and upload dbt project to ephemeral OneLake
+        id: upload-dbt-project
+        run: |
+          zip -r /tmp/project.zip . --exclude ".git/*"
+          python3 ${{ env.SCRIPTS }}/fabric_api.py upload-file \
+            --workspace-id "${{ steps.provision.outputs.workspace_id }}" \
+            --lakehouse-id "${{ steps.provision.outputs.lakehouse_id }}" \
+            --local-path /tmp/project.zip \
+            --remote-path "Files/ci-artifacts/dbt-project/${{ github.event.pull_request.head.sha }}/project.zip"
+
+      - name: Deploy interactive notebook
+        id: generate-notebook
+        env:
+          EPHEMERAL_WORKSPACE_ID: ${{ steps.provision.outputs.workspace_id }}
+          EPHEMERAL_WORKSPACE_NAME: ${{ needs.preflight.outputs.ephemeral_name }}
+          EPHEMERAL_LAKEHOUSE_ID: ${{ steps.provision.outputs.lakehouse_id }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PROJECT_ZIP_ABFSS: ${{ steps.upload-dbt-project.outputs.abfss_path }}
+          PROD_STATE_ABFSS: ${{ steps.upload-prod-state.outputs.abfss_path }}
+          CI_TARGET: ${{ needs.preflight.outputs.ci_target }}
+          PROD_WORKSPACE_NAME: ${{ needs.preflight.outputs.prod_workspace_name }}
+          PROD_LAKEHOUSE_NAME: ${{ needs.preflight.outputs.prod_lakehouse_name }}
+        run: python3 ${{ env.SCRIPTS }}/generate_ci_notebook.py
+
+      - name: Post workspace comment
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EPHEMERAL_WORKSPACE_ID: ${{ steps.provision.outputs.workspace_id }}
+          EPHEMERAL_WORKSPACE_NAME: ${{ needs.preflight.outputs.ephemeral_name }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GREENFIELD_FALLBACK: ${{ needs.fetch-prod-state.outputs.greenfield_fallback }}
+          PROVISION_OUTCOME: ${{ job.status }}
+          STEP_PROVISION: ${{ steps.provision.outcome }}
+          STEP_CREATE_ENV: ${{ steps.create-environment.outcome }}
+          STEP_PUBLISH_ENV: ${{ steps.publish-environment.outcome }}
+          STEP_SET_DEFAULT: ${{ steps.set-workspace-default.outcome }}
+          STEP_UPLOAD_PROD_STATE: ${{ steps.upload-prod-state.outcome }}
+          STEP_DERIVE_SHORTCUTS: ${{ steps.derive-shortcuts.outcome }}
+          STEP_SEED_SHORTCUTS: ${{ steps.seed-shortcuts.outcome }}
+          STEP_GENERATE_NOTEBOOK: ${{ steps.generate-notebook.outcome }}
+          INTERACTIVE_NOTEBOOK_ID: ${{ steps.generate-notebook.outputs.interactive_notebook_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python3 ${{ env.SCRIPTS }}/notify.py --workspace-comment-only
+
+      - name: Emit ci/provision final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              state, desc = "success", "Provision workspace ready"
+          else:
+              state, desc = "failure", f"Provision workspace failed — see {run_url}"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/provision",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  # ─── STATIC ANALYSIS ──────────────────────────────────────────────────────
+  # Gate 0: linting + dbt compile + build --empty + diff-scoped schema gate.
+  # Posts ci/static-check commit status; either blocking step failing marks Gate 0 failed.
+  static-analysis:
+    name: "ci/static-check: static analysis"
+    needs: [preflight]
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install analysis tools
+        run: |
+          pip install ruff sqlfluff pyyaml "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+          case "$(uname -m)" in
+            arm64|aarch64) GITLEAKS_ARCH=linux_arm64 ;;
+            *)              GITLEAKS_ARCH=linux_x64 ;;
+          esac
+          curl -sSL "https://github.com/gitleaks/gitleaks/releases/download/v8.18.4/gitleaks_8.18.4_${GITLEAKS_ARCH}.tar.gz" \
+            | tar xz -C /usr/local/bin gitleaks
+
+      - run: mkdir -p reports
+
+      - name: Emit Gate 0 pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/static-check",
+              "pending",
+              "Gate 0: static analysis running",
+              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+          )
+          EOF
+
+      - name: ruff
+        continue-on-error: true
+        run: ruff check . --exclude .github --output-format json > reports/ruff.json 2>/dev/null
+
+      - name: sqlfluff
+        continue-on-error: true
+        run: sqlfluff lint "$PROJ/models" --dialect sparksql --format json > reports/sqlfluff.json 2>/dev/null
+
+      - name: gitleaks
+        continue-on-error: true
+        run: |
+          gitleaks detect --source . \
+            --report-format json \
+            --report-path reports/gitleaks.json \
+            --no-banner 2>/dev/null
+          # gitleaks may skip writing the report file when there are zero findings.
+          # Create an empty-findings sentinel so Gate 0 evaluate can distinguish
+          # "clean scan" from "step never ran".
+          [ -f reports/gitleaks.json ] || echo '[]' > reports/gitleaks.json
+
+      - name: dbt scorecard
+        continue-on-error: true
+        env:
+          WORKSPACE_ID: dummy
+          WORKSPACE_NAME: dummy
+          LAKEHOUSE: dummy
+          LAKEHOUSE_ID: dummy
+          SCHEMA: dummy
+          DBT_JOB_NAME: ci-parse
+        run: |
+          dbt deps --project-dir "$PROJ" --quiet 2>/dev/null || true
+          dbt compile --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --exclude package:elementary --quiet 2>/dev/null || true
+          python3 ${{ env.SCRIPTS }}/scorecard.py \
+            --manifest "$PROJ/target/manifest.json" \
+            --agents-md AGENTS.md \
+            > reports/scorecard.json
+
+      - name: dbt compile
+        continue-on-error: true
+        env:
+          WORKSPACE_ID: dummy
+          WORKSPACE_NAME: dummy
+          LAKEHOUSE: dummy
+          LAKEHOUSE_ID: dummy
+          SCHEMA: dummy
+        run: |
+          python3 ${{ env.SCRIPTS }}/dbt_error_report.py reports/dbt_compile.json \
+            compile --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile \
+            --exclude package:elementary || true
+
+      - name: Schema gate
+        continue-on-error: true
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/schema_gate.py \
+            --manifest "$PROJ/target/manifest.json" \
+            --repo "${{ github.repository }}" \
+            --base-sha "${{ github.event.pull_request.base.sha }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --output reports/schema_gate.json || true
+
+      - name: Upload reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ci-reports-pr${{ github.event.pull_request.number }}
+          path: reports/
+          retention-days: 30
+
+      - name: Post gate-0 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          from notify_render import render_gate_0_comment
+          import pr_comment
+
+          def load(path):
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except (OSError, json.JSONDecodeError):
+                  return None
+
+          compile_result    = load("reports/dbt_compile.json")
+          schema_gate       = load("reports/schema_gate.json")
+          ruff              = load("reports/ruff.json")
+          sqlfluff          = load("reports/sqlfluff.json")
+          gitleaks          = load("reports/gitleaks.json")
+          scorecard         = load("reports/scorecard.json")
+          shortcut_seeding  = load("reports/shortcut_seeding.json")
+
+          body = render_gate_0_comment(
+              compile_result, schema_gate,
+              ruff=ruff, sqlfluff=sqlfluff, gitleaks=gitleaks,
+              scorecard=scorecard, shortcut_seeding=shortcut_seeding,
+              run_url=os.environ.get("RUN_URL", ""),
+          )
+          pr_comment.upsert(
+              marker="<!-- ci-static-check -->",
+              body=body,
+              pr_number=os.environ["PR_NUMBER"],
+              repo=os.environ["GITHUB_REPOSITORY"],
+          )
+          PYEOF
+
+      - name: Gate 0 evaluate
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import sys
+
+          def load(path):
+              if not os.path.exists(path):
+                  return None
+              try:
+                  with open(path) as f:
+                      return json.load(f)
+              except (json.JSONDecodeError, OSError):
+                  return None
+
+          def ruff_ok(r):
+              return isinstance(r, list) and len(r) == 0
+
+          def sqlfluff_ok(r):
+              if isinstance(r, list):
+                  files = r
+              elif isinstance(r, dict):
+                  files = r.get("files", [])
+              else:
+                  return False
+              return all(not f.get("violations") for f in files)
+
+          def gitleaks_ok(r):
+              if isinstance(r, list):
+                  findings = r
+              elif isinstance(r, dict):
+                  findings = r.get("findings", [])
+              else:
+                  return False
+              return len(findings) == 0
+
+          def passed_field_ok(r):
+              return isinstance(r, dict) and bool(r.get("passed"))
+
+          checks = [
+              ("ruff", ruff_ok, "reports/ruff.json"),
+              ("sqlfluff", sqlfluff_ok, "reports/sqlfluff.json"),
+              ("gitleaks", gitleaks_ok, "reports/gitleaks.json"),
+              ("dbt compile", passed_field_ok, "reports/dbt_compile.json"),
+              ("schema gate", passed_field_ok, "reports/schema_gate.json"),
+              ("dbt scorecard", passed_field_ok, "reports/scorecard.json"),
+          ]
+
+          failures = []
+          for name, check, path in checks:
+              report = load(path)
+              if report is None:
+                  failures.append(f"{name} (report missing)")
+              elif not check(report):
+                  failures.append(name)
+
+          if failures:
+              print(f"::error::Gate 0 failed: {', '.join(failures)}", file=sys.stderr)
+              sys.exit(1)
+          print("Gate 0: all blocking checks passed.")
+          PYEOF
+
+      - name: Emit Gate 0 final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import emit_status
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if os.environ["JOB_STATUS"] == "success":
+              state, desc = "success", "Gate 0: all checks passed"
+          else:
+              state, desc = "failure", "Gate 0: one or more checks failed"
+          emit_status.emit_status(
+              os.environ["GITHUB_REPOSITORY"],
+              os.environ["CI_HEAD_SHA"],
+              "ci/static-check",
+              state,
+              desc,
+              run_url,
+          )
+          EOF
+
+  # ─── GATE 3 — UNIT TESTS ──────────────────────────────────────────────────
+  # dbt unit tests on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  gate-3-unit:
+    name: "ci/unit-tests: unit tests"
+    needs: [preflight, provision-workspace, gate-2-write]
+    if: github.event.action != 'closed' && needs.gate-2-write.result == 'success'
+    timeout-minutes: 130
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-gate-3
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Install dbt-fabricspark
+        if: vars.FAKE_WORLD == ''
+        run: pip install "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Add fake-world dbt shim to PATH
+        if: vars.FAKE_WORLD != ''
+        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
+
+      - run: mkdir -p reports
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+
+      - name: Login — per-domain SPN
+        if: vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Run Gate 3
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/gate3_fabric_runner.py run-gate \
+            --workspace-id "${{ needs.provision-workspace.outputs.ephemeral_workspace_id }}" \
+            --workspace-name "${{ needs.preflight.outputs.ephemeral_name }}" \
+            --lakehouse-id "${{ needs.provision-workspace.outputs.ephemeral_lakehouse_id }}" \
+            --lakehouse-name "${{ needs.provision-workspace.outputs.lakehouse_name }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --deployment-manifest "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json" \
+            --profiles-dir .github/profiles \
+            --output reports/gate-3.json
+
+      - name: Upload Gate 3 report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-reports-gate-3-pr${{ github.event.pull_request.number }}
+          path: reports/gate-3.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  gate-3-unit-comment:
+    name: "gate-3-unit comment"
+    needs: [preflight, gate-2-write, gate-3-unit]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Download Gate 3 report
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: ci-reports-gate-3-pr${{ github.event.pull_request.number }}
+          path: reports/
+
+      - name: Post gate-3 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          REAL_WORK_RESULT: ${{ needs.gate-3-unit.result }}
+        run: |
+          python3 - <<'PYEOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          from notify_render import render_gate_3_comment, GATE_3_MARKER
+          from pr_comment import post_gate_comment
+
+          post_gate_comment(
+              "reports/gate-3.json",
+              render_gate_3_comment,
+              GATE_3_MARKER,
+              os.environ["PR_NUMBER"],
+              os.environ["REPO"],
+              real_work_result=os.environ["REAL_WORK_RESULT"],
+          )
+          PYEOF
+
+  # ─── GATE 2 — ISOLATED BUILD ──────────────────────────────────────────────
+  # dbt clone + dbt run on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  gate-2-write:
+    name: "ci/run: isolated build"
+    needs: [preflight, provision-workspace, fetch-prod-state]
+    if: github.event.action != 'closed'
+    timeout-minutes: 130
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-gate-2
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Install dbt-fabricspark
+        if: vars.FAKE_WORLD == ''
+        run: pip install "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Add fake-world dbt shim to PATH
+        if: vars.FAKE_WORLD != ''
+        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
+
+      - run: mkdir -p reports
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+
+      - name: Login — per-domain SPN
+        if: vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      - name: Download prod-state artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: prod-state-pr${{ github.event.pull_request.number }}
+          path: prod-state/
+        continue-on-error: true
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Run Gate 2
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/gate2_fabric_runner.py run-gate \
+            --workspace-id "${{ needs.provision-workspace.outputs.ephemeral_workspace_id }}" \
+            --workspace-name "${{ needs.preflight.outputs.ephemeral_name }}" \
+            --lakehouse-id "${{ needs.provision-workspace.outputs.ephemeral_lakehouse_id }}" \
+            --lakehouse-name "${{ needs.provision-workspace.outputs.lakehouse_name }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --deployment-manifest "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json" \
+            --prod-state-dir prod-state \
+            --profiles-dir .github/profiles \
+            --output reports/gate-2.json
+
+      - name: Post gate-2 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render, pr_comment
+          try:
+              with open("reports/gate-2.json") as f:
+                  result = json.load(f)
+          except (OSError, json.JSONDecodeError):
+              result = None
+          body = notify_render.render_gate_2_comment(result, run_url=os.environ.get("RUN_URL", ""))
+          pr_comment.upsert("<!-- ci-run -->", body, os.environ["PR_NUMBER"], os.environ["GITHUB_REPOSITORY"])
+          EOF
+
+  # ─── GATE 4 — DATA TESTS ─────────────────────────────────────────────────
+  # dbt test --store-failures on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  gate-4-data-test:
+    name: "ci/data-tests: data tests"
+    needs: [preflight, provision-workspace, gate-2-write]
+    if: github.event.action != 'closed' && needs.gate-2-write.result == 'success'
+    timeout-minutes: 130
+    concurrency:
+      group: pr-${{ github.event.pull_request.number }}-gate-4
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install pyyaml --quiet
+
+      - name: Install dbt-fabricspark
+        if: vars.FAKE_WORLD == ''
+        run: pip install "dbt-core>=1.8" "dbt-fabricspark>=1.8" --quiet
+
+      - name: Add fake-world dbt shim to PATH
+        if: vars.FAKE_WORLD != ''
+        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
+
+      - run: mkdir -p reports
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+
+      - name: Login — per-domain SPN
+        if: vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      - name: Download prod-state artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: prod-state-pr${{ github.event.pull_request.number }}
+          path: prod-state/
+        continue-on-error: true
+
+      - name: Download deployment manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: deployment-manifest-${{ github.event.pull_request.head.sha }}
+          path: reports/
+
+      - name: Run Gate 4
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/gate4_fabric_runner.py run-gate \
+            --workspace-id "${{ needs.provision-workspace.outputs.ephemeral_workspace_id }}" \
+            --workspace-name "${{ needs.preflight.outputs.ephemeral_name }}" \
+            --lakehouse-id "${{ needs.provision-workspace.outputs.ephemeral_lakehouse_id }}" \
+            --lakehouse-name "${{ needs.provision-workspace.outputs.lakehouse_name }}" \
+            --head-sha "${{ github.event.pull_request.head.sha }}" \
+            --deployment-manifest "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json" \
+            --prod-state-dir prod-state \
+            --profiles-dir .github/profiles \
+            --output reports/gate-4.json
+
+      - name: Upload Gate 4 report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-reports-gate-4-pr${{ github.event.pull_request.number }}
+          path: reports/gate-4.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  gate-4-data-test-comment:
+    name: "gate-4-data-test comment"
+    needs: [preflight, gate-2-write, gate-4-data-test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+
+      - name: Download Gate 4 report
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: ci-reports-gate-4-pr${{ github.event.pull_request.number }}
+          path: reports/
+
+      - name: Post gate-4 comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REAL_WORK_RESULT: ${{ needs.gate-4-data-test.result }}
+        run: |
+          python3 - <<'EOF'
+          import os, sys
+          sys.path.insert(0, ".github/scripts")
+          import notify_render
+          from pr_comment import post_gate_comment
+
+          post_gate_comment(
+              "reports/gate-4.json",
+              notify_render.render_gate_4_comment,
+              notify_render.GATE_4_MARKER,
+              os.environ["PR_NUMBER"],
+              os.environ["GITHUB_REPOSITORY"],
+              real_work_result=os.environ["REAL_WORK_RESULT"],
+          )
+          EOF

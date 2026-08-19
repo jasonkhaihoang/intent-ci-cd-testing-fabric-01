@@ -1,0 +1,42 @@
+# CI dbt profiles for the six-gate ladder.
+# Profile name (dbt_fab_spark) matches domain repo dbt_project.yml — no project file changes needed.
+# CI workflow always passes --profiles-dir .github/profiles; no collision with ~/.dbt/profiles.yml.
+dbt_fab_spark:
+  outputs:
+    # Gates 0 + 1: compile-only Fabric target. Macros resolve to Fabric T-SQL.
+    # Dummy GUIDs — no DB connection made for dbt compile / dbt ls / dbt parse.
+    dbt_fabric_compile:
+      type: fabricspark
+      method: az_cli
+      workspaceid: "00000000-0000-0000-0000-000000000000"
+      lakehouse: "00000000-0000-0000-0000-000000000000"
+      lakehouseid: "00000000-0000-0000-0000-000000000000"
+      schema: dbt_compile
+      spark_config:
+        name: "dbt_ci_compile"
+
+    # Gates 2, 3, 4, 5: real row execution against the ephemeral Fabric workspace.
+    # method: livy is the only valid Fabric connection method.
+    # authentication: CLI uses az account get-access-token, works after azure/login (Fabric UAMI OIDC).
+    # Env vars set by gate runner scripts before dbt is spawned.
+    ephemeral_ci:
+      authentication: CLI
+      endpoint: https://msitapi.fabric.microsoft.com/v1
+      livy_mode: "{{ env_var('FAKE_WORLD_LIVY_MODE', 'fabric') }}"
+      livy_url: "{{ env_var('FAKE_WORLD_LIVY_URL', 'http://localhost:8998') }}"
+      workspaceid: "{{ env_var('WORKSPACE_ID') }}"
+      workspace_name: "{{ env_var('WORKSPACE_NAME') }}"
+      lakehouse: "{{ env_var('LAKEHOUSE') }}"
+      lakehouseid: "{{ env_var('LAKEHOUSE_ID') }}"
+      lakehouse_schemas_enabled: true
+      schema: "{{ env_var('SCHEMA') }}"
+      method: livy
+      type: fabricspark
+      reuse_livy_session: true
+      session_id_file: "{{ env_var('SESSION_ID_FILE', '') }}"
+      spark_config:
+        name: "dbt_ci_session"
+      connect_retries: 2
+      connect_timeout: 500
+      threads: 10
+  target: dbt_fabric_compile

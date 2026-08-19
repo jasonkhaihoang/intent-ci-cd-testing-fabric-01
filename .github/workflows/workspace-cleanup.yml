@@ -1,0 +1,100 @@
+# Fabric Workspace Cleanup
+#
+# Triggered daily or manually. Deletes vibedata_ephemeral_* Fabric workspaces
+# whose PR has been closed or no longer exists in THIS domain repo.
+
+name: Fabric Workspace Cleanup
+
+on:
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+  # pull_request_target always reads this workflow from the default branch,
+  # firing reliably for all PRs regardless of when they were opened (VD-2028).
+  # actions/checkout@v5 defaults to the base-branch ref under this trigger —
+  # no untrusted PR code is checked out, so secrets exposure is safe.
+  pull_request_target:
+    types: [closed]
+
+env:
+  PYTHON_VERSION: "3.11"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  load-config:
+    runs-on: ubuntu-latest
+    outputs:
+      azure_tenant_id_var: ${{ steps.parse.outputs.azure_tenant_id_var }}
+      azure_client_id_var: ${{ steps.parse.outputs.azure_client_id_var }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - run: pip install pyyaml --quiet
+
+      - name: Parse ci-config.yml indirection keys
+        id: parse
+        run: |
+          python3 - <<'EOF'
+          import os
+          import sys
+
+          sys.path.insert(0, ".github/scripts")
+          from ci_config import locate_ci_config, parse_ci_config
+
+          with open(locate_ci_config()) as f:
+              result = parse_ci_config(f.read())
+
+          if not result["ok"]:
+              print(f"::error::ci-config.yml parse failed: {result['error']}")
+              sys.exit(1)
+
+          config = result["config"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"azure_tenant_id_var={config.get('AZURE_TENANT_ID_VAR', 'TENANT_ID')}\n")
+              out.write(f"azure_client_id_var={config.get('AZURE_CLIENT_ID_VAR', 'SPN_CLIENT_ID')}\n")
+          EOF
+
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: load-config
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - run: pip install requests pyyaml --quiet
+
+      - name: Login — per-domain SPN
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars[needs.load-config.outputs.azure_tenant_id_var] }}
+          client-id: ${{ vars[needs.load-config.outputs.azure_client_id_var] }}
+          allow-no-subscriptions: true
+
+      - name: Delete orphaned ephemeral workspaces
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          EXTRA=""
+          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
+            EXTRA="--pr-number ${{ github.event.pull_request.number }}"
+          fi
+          python3 .github/scripts/fabric_api.py cleanup --repo "$GITHUB_REPOSITORY" $EXTRA
+
+      - name: Upload audit log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workspace-cleanup-audit-${{ github.run_id }}
+          path: workspace-cleanup-audit.json
+          if-no-files-found: warn
