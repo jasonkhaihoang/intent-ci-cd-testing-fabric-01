@@ -196,11 +196,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if _is_greenfield():
         manifest_data = _read_json(runner_io.target_path("target/manifest.json")) or {}
-        seed_backed = Manifest.from_dict(manifest_data).seed_relations()
+        seed_backed = Manifest.from_dict(manifest_data).seed_table_names()
         source_items = sorted(
             (uid, node)
             for uid, node in (manifest_data.get("sources") or {}).items()
-            if ((node.get("schema") or ""), _node_table_name(node)) not in seed_backed
+            if _node_table_name(node) not in seed_backed
         )
         schema_enabled = _is_schema_enabled([n for _, n in source_items])
         shortcuts = [

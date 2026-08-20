@@ -135,15 +135,18 @@ class Manifest:
     def source(self, uid: str) -> dict | None:
         return self._sources.get(uid)
 
-    def seed_relations(self) -> set[tuple[str, str]]:
-        """(schema, table_name) pairs materialized by a `dbt seed` node.
+    def seed_table_names(self) -> set[str]:
+        """Table names (alias, falling back to name) materialized by a `dbt seed` node.
 
         A source registered in sources.yml but actually populated by a seed in the
         same project has no physical existence in prod — callers that derive
-        prod-shortcut candidates from sources should skip these.
+        prod-shortcut candidates from sources should skip these. Matched by name
+        only, not schema: a seed's manifest `schema` reflects whatever profile
+        target parsed it (e.g. a compile-only target's dummy schema), which has
+        no relation to the schema the source declares it will land in.
         """
         return {
-            (n.get("schema") or "", n.get("alias") or n.get("name", ""))
+            n.get("alias") or n.get("name", "")
             for n in self._nodes.values()
             if n.get("resource_type") == "seed"
         }
