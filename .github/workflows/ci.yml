@@ -1222,7 +1222,7 @@ jobs:
           DBT_JOB_NAME: ci-parse
         run: |
           dbt deps --project-dir "$PROJ" --quiet 2>/dev/null || true
-          dbt compile --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --exclude package:elementary package:dbt_project_evaluator --quiet 2>/dev/null || true
+          dbt compile --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --exclude package:elementary --quiet 2>/dev/null || true
           python3 ${{ env.SCRIPTS }}/scorecard.py \
             --manifest "$PROJ/target/manifest.json" \
             --agents-md AGENTS.md \
@@ -1239,7 +1239,7 @@ jobs:
         run: |
           python3 ${{ env.SCRIPTS }}/dbt_error_report.py reports/dbt_compile.json \
             compile --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile \
-            --exclude package:elementary package:dbt_project_evaluator || true
+            --exclude package:elementary || true
 
       - name: Schema gate
         continue-on-error: true
