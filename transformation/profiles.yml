@@ -1,0 +1,75 @@
+# Studio-owned Fabric dbt profile. Sandbox execution authenticates exclusively
+# through the credential broker injected into the agent runtime. GitHub Actions
+# uses its separate .github/profiles/profiles.yml after azure/login.
+dbt_fab_spark:
+  target: ephemeral_dev
+  outputs:
+    ephemeral_dev:
+      type: fabricspark
+      method: livy
+      authentication: token_credential
+      credential_class: vibedata_studio_azure_cred_broker.StudioAzureCredBroker
+      credential_kwargs:
+        broker_url: "{{ env_var('VD_CREDENTIAL_BROKER_URL') }}"
+        credential_file: "{{ env_var('VD_CREDENTIAL_FILE') }}"
+      endpoint: https://api.fabric.microsoft.com/v1
+      workspaceid: "{{ env_var('VD_EPHM_FABRIC_WORKSPACE_ID') }}"
+      workspace_name: "{{ env_var('VD_EPHM_FABRIC_WORKSPACE_NAME') }}"
+      lakehouse: "{{ env_var('VD_EPHM_FABRIC_LAKEHOUSE_NAME') }}"
+      lakehouseid: "{{ env_var('VD_EPHM_FABRIC_LAKEHOUSE_ID') }}"
+      schema: "{{ env_var('VD_EPHM_SCHEMA') }}"
+      high_concurrency: true
+      reuse_session: true
+      session_id_file: ./.livy-session-id.txt
+      spark_config:
+        name: "{{ env_var('DBT_JOB_NAME') }}"
+      connect_retries: 3
+      retry_all: true
+      http_timeout: 120
+      connect_timeout: 10
+      session_start_timeout: "{{ env_var('DBT_FABRIC_SESSION_START_TIMEOUT', '600') | int }}"
+      threads: 5
+
+    ephemeral_dep:
+      type: fabricspark
+      method: livy
+      authentication: fabric_notebook
+      endpoint: https://api.fabric.microsoft.com/v1
+      workspaceid: "{{ env_var('VD_EPHM_FABRIC_WORKSPACE_ID') }}"
+      workspace_name: "{{ env_var('VD_EPHM_FABRIC_WORKSPACE_NAME') }}"
+      lakehouse: "{{ env_var('VD_EPHM_FABRIC_LAKEHOUSE_NAME') }}"
+      lakehouseid: "{{ env_var('VD_EPHM_FABRIC_LAKEHOUSE_ID') }}"
+      schema: "{{ env_var('VD_EPHM_SCHEMA') }}"
+      high_concurrency: true
+      reuse_session: true
+      session_id_file: ./.livy-session-id.txt
+      spark_config:
+        name: "{{ env_var('DBT_JOB_NAME') }}"
+      connect_retries: 3
+      retry_all: true
+      http_timeout: 120
+      connect_timeout: 10
+      session_start_timeout: "{{ env_var('DBT_FABRIC_SESSION_START_TIMEOUT', '600') | int }}"
+      threads: 5
+
+    prod:
+      type: fabricspark
+      method: livy
+      authentication: fabric_notebook
+      endpoint: https://api.fabric.microsoft.com/v1
+      workspaceid: "{{ env_var('VD_DOMAIN_FABRIC_WORKSPACE_ID') }}"
+      workspace_name: "{{ env_var('VD_DOMAIN_FABRIC_WORKSPACE_NAME') }}"
+      lakehouse: "{{ env_var('VD_DOMAIN_FABRIC_LAKEHOUSE_NAME') }}"
+      lakehouseid: "{{ env_var('VD_DOMAIN_FABRIC_LAKEHOUSE_ID') }}"
+      schema: "{{ env_var('VD_DOMAIN_SCHEMA') }}"
+      high_concurrency: true
+      reuse_session: true
+      session_id_file: ./.livy-session-id.txt
+      spark_config:
+        name: "{{ env_var('DBT_JOB_NAME') }}"
+      connect_retries: 3
+      retry_all: true
+      http_timeout: 120
+      connect_timeout: 10
+      session_start_timeout: "{{ env_var('DBT_FABRIC_SESSION_START_TIMEOUT', '600') | int }}"
+      threads: 5

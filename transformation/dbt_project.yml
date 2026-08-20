@@ -1,0 +1,58 @@
+# Studio-owned Fabric dbt project (VD-3794). Seeded skip_if_exists, so a domain
+# that has already customized its project keeps it untouched on every later spawn.
+#
+# `fabric_domain` and `dbt_fab_spark` are substituted at seed time by
+# the template engine, NOT by dbt. `name:` identifies the project and must equal
+# the top-level keys under `models:` and `sources:`; `profile:` is a lookup key
+# into the seeded transformation/profiles.yml and is deliberately different.
+# Everything else resolves at runtime through env_var(), so no domain coordinate
+# is baked into the committed file.
+name: 'fabric_domain'
+version: '1.0.0'
+config-version: 2
+
+profile: 'dbt_fab_spark'
+
+model-paths: ['models']
+analysis-paths: ['analyses']
+test-paths: ['tests']
+seed-paths: ['seeds']
+macro-paths: ['macros']
+snapshot-paths: ['snapshots']
+
+clean-targets:
+  - 'target'
+  - 'dbt_packages'
+
+dispatch:
+  - macro_namespace: elementary
+    search_order:
+      - elementary_fabricspark
+      - elementary
+
+vars:
+  disable_dbt_artifacts_autoupload: true
+  disable_dbt_invocation_autoupload: true
+  disable_run_results: true
+
+models:
+  'fabric_domain':
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: ephemeral
+    marts:
+      +materialized: table
+
+# Sources carry NO workspace here (VD-4390). This block used to pin every source
+# in the project to the Domain workspace, seeded as a literal. That made a source
+# the Intent created in its OWN ephemeral Lakehouse resolve against the Domain
+# instead — missing there, or worse, silently reading a same-named Domain table
+# (VD-4393).
+#
+# Sources now resolve in the target's own workspace, and `macros/source_defer.sql`
+# gives them the same `--defer` semantics `ref()` has: the Intent's own copy wins
+# when it exists, and the Domain's location is used when it does not. The deferred
+# location comes from the prod manifest at run time, so no workspace is baked into
+# this committed file. There is deliberately no `sources:` block at all — an
+# empty one would only restate dbt's defaults.

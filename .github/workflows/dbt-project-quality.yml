@@ -1,0 +1,113 @@
+# dbt Quality Workflow
+#
+# Runs dbt-project-evaluator on every PR using DuckDB (offline, no Fabric connection).
+# Runs in parallel with ci.yml — does not block merge.
+# Posts evaluation results as a PR comment (advisory only).
+#
+# Part of the extensible dbt quality check series.
+# Design: docs/2026-04-16-dbt-quality-ci-workflow-design.md
+
+name: dbt Quality
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  SCRIPTS: .github/scripts
+
+jobs:
+  dbt-project-evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve layout
+        run: |
+          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
+          echo "CICFG=$([ -f .github/ci-config.yml ] && echo .github/ci-config.yml || echo ci-config.yml)" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Emit ci/dbt-project-evaluate pending
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/emit_status.py \
+            --context "ci/dbt-project-evaluate" \
+            --state pending \
+            --description "dbt-project-evaluate: running" \
+            --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Install dependencies
+        run: pip install dbt-duckdb dbt-core pyyaml --quiet
+
+      - name: dbt deps
+        run: dbt deps --project-dir "$PROJ" --quiet
+
+      - name: dbt compile (offline)
+        env:
+          # Dummy values so the Spark profile resolves without error during compile.
+          # The dbt_quality target uses DuckDB and ignores these.
+          WORKSPACE_ID: dummy
+          WORKSPACE_NAME: dummy
+          LAKEHOUSE: dummy
+          LAKEHOUSE_ID: dummy
+          SCHEMA: dummy
+          DBT_JOB_NAME: dbt-quality
+        run: |
+          dbt compile \
+            --project-dir "$PROJ" \
+            --profiles-dir .github/profiles/dbt-quality \
+            --profile dbt_project_quality_profile \
+            --target dbt_quality \
+            --quiet 2>/dev/null || true
+
+      - name: Run dbt-project-evaluator
+        run: |
+          dbt build \
+            --project-dir "$PROJ" \
+            --select dbt_project_evaluator \
+            --profiles-dir .github/profiles/dbt-quality \
+            --profile dbt_project_quality_profile \
+            --target dbt_quality \
+            --quiet || true
+
+      - name: Post PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/scripts/dbt_quality_comment.py
+
+      - name: Emit ci/dbt-project-evaluate final status
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          if [ "$JOB_STATUS" = "success" ]; then
+            STATE=success
+            DESC="dbt-project-evaluate: passed"
+          else
+            STATE=failure
+            DESC="dbt-project-evaluate: failed"
+          fi
+          python3 ${{ env.SCRIPTS }}/emit_status.py \
+            --context "ci/dbt-project-evaluate" \
+            --state "$STATE" \
+            --description "$DESC" \
+            --target-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

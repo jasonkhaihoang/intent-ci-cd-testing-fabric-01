@@ -1,0 +1,17 @@
+# Single dlt config for this ingestion project — seeded by Vibe Data Studio.
+#
+# [destination.filesystem] is Studio-owned and names the DOMAIN (prod)
+# lakehouse. An Intent run retargets to its Ephemeral Workspace via dlt's own
+# DESTINATION__FILESYSTEM__* env override, which dlt resolves before this file.
+# Never hand-edit it, and never commit an ephemeral workspace/lakehouse id here.
+#
+# bucket_url is deliberately absent: each execution unit sets its own (the
+# notebook unit from the mounted lakehouse, the Studio unit from the Intent
+# staging dir).
+#
+# [sources.<connection>] sections belong to /add-source. Add a source with
+# that command; do not write connection config by hand.
+
+[destination.filesystem]
+workspace_id = "7aeb9e12-8ad0-421d-82ad-262512491e16"
+lakehouse_id = "fe90ede0-e379-446e-9e69-1b487dc71946"

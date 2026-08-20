@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: stg_salesforce__accounts
+    description: >
+      One row per Salesforce account. Staging layer, 1:1 with the raw
+      salesforce.account source; soft-deleted rows removed and columns renamed
+      to snake_case.
+    columns:
+      - name: account_id
+        description: Salesforce Account ID.
+        tests:
+          - not_null
+          - unique
+      - name: account_name
+        description: Account name.
+      - name: account_type
+        description: Account type (Customer, Prospect).
+      - name: industry
+        description: Account industry.
+      - name: billing_city
+        description: Billing city.
+      - name: billing_state
+        description: Billing state or province.
+      - name: billing_country
+        description: Billing country.
+      - name: owner_id
+        description: Salesforce User ID of the account owner.
+      - name: created_date
+        description: Account creation timestamp.
+      - name: last_modified_date
+        description: Last modification timestamp.

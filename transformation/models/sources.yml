@@ -1,0 +1,32 @@
+version: 2
+
+sources:
+  - name: salesforce
+    description: Raw Salesforce data landed in the lakehouse.
+    schema: dbo
+    tables:
+      - name: account
+        description: Salesforce Account records.
+        columns:
+          - name: id
+            description: Salesforce Account ID.
+          - name: name
+            description: Account name.
+          - name: type
+            description: Account type (Customer, Prospect).
+          - name: industry
+            description: Account industry.
+          - name: billingcity
+            description: Billing city.
+          - name: billingstate
+            description: Billing state or province.
+          - name: billingcountry
+            description: Billing country.
+          - name: ownerid
+            description: Salesforce User ID of the account owner.
+          - name: isdeleted
+            description: Soft-delete flag.
+          - name: createddate
+            description: Account creation timestamp.
+          - name: lastmodifieddate
+            description: Last modification timestamp.
