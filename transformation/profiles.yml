@@ -1,0 +1,32 @@
+# Studio-owned DuckDB-local dbt profile (VD-3815). Both database locations are
+# deployment-specific absolute paths delivered by the Runtime Location Contract
+# env — never a literal path, never a workspace-relative file.
+#
+# The domain database attaches read-only in dev and carries NO alias, so its
+# catalog is named after its own file — the same name the prod target reports and
+# the same name every prod manifest records. That is what lets `--defer` address
+# it: the deferred location comes out of the manifest, so a Studio-invented alias
+# could never be resolved (VD-4390). Reference domain relations as
+# <domain-file-stem>.<schema>.<table>; `VD_DOMAIN_DUCKDB_DATABASE` carries that
+# stem for anything that needs to name it.
+#
+# An alias-less attach is only safe because the sandbox file is named after the
+# Intent (`ephm_<domain>_<intent>.duckdb`) rather than after the Domain's file, so
+# the two catalogs cannot collide. Do not reintroduce a shared file name.
+dbt_duckdb_local:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('VD_EPHM_DUCKDB_PATH') }}"
+      schema: "{{ env_var('VD_EPHM_SCHEMA') }}"
+      attach:
+        - path: "{{ env_var('VD_DOMAIN_DUCKDB_PATH') }}"
+          read_only: true
+      threads: 4
+
+    prod:
+      type: duckdb
+      path: "{{ env_var('VD_DOMAIN_DUCKDB_PATH') }}"
+      schema: "{{ env_var('VD_DOMAIN_SCHEMA') }}"
+      threads: 4
