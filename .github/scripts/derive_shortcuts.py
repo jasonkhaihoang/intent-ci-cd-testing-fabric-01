@@ -8,7 +8,9 @@ Logic:
 1. Detect greenfield (`prod-state/source.json.mode == "greenfield"`, or sidecar
    absent) → load `target/manifest.json` and emit shortcuts for every source.*
    node (greenfield = no CI baseline, not no prod data; all sources need shortcuts
-   so Gate 2's full build can resolve {{ source() }} refs).
+   so Gate 2's full build can resolve {{ source() }} refs) — except a source
+   backed by a `dbt seed` in the same project, which has no physical prod
+   location to shortcut from and is materialized locally by the seed itself.
 2. Run `dbt ls --select state:modified+ --resource-type model snapshot
    --state ./prod-state --output json` to identify the build closure.
    Empty result → `[]` and zero_state="no-modified-models".
@@ -194,7 +196,12 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if _is_greenfield():
         manifest_data = _read_json(runner_io.target_path("target/manifest.json")) or {}
-        source_items = sorted((manifest_data.get("sources") or {}).items())
+        seed_backed = Manifest.from_dict(manifest_data).seed_relations()
+        source_items = sorted(
+            (uid, node)
+            for uid, node in (manifest_data.get("sources") or {}).items()
+            if ((node.get("schema") or ""), _node_table_name(node)) not in seed_backed
+        )
         schema_enabled = _is_schema_enabled([n for _, n in source_items])
         shortcuts = [
             _shortcut_entry(node, uid, schema_enabled, prod_workspace_id, prod_lakehouse_id)

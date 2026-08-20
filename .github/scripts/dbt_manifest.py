@@ -135,6 +135,19 @@ class Manifest:
     def source(self, uid: str) -> dict | None:
         return self._sources.get(uid)
 
+    def seed_relations(self) -> set[tuple[str, str]]:
+        """(schema, table_name) pairs materialized by a `dbt seed` node.
+
+        A source registered in sources.yml but actually populated by a seed in the
+        same project has no physical existence in prod — callers that derive
+        prod-shortcut candidates from sources should skip these.
+        """
+        return {
+            (n.get("schema") or "", n.get("alias") or n.get("name", ""))
+            for n in self._nodes.values()
+            if n.get("resource_type") == "seed"
+        }
+
     @property
     def nodes(self) -> dict:
         """Underlying nodes dict — used by consumers that iterate the full node table."""
