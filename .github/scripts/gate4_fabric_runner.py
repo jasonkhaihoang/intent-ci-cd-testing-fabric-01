@@ -94,14 +94,14 @@ def cmd_run_gate(args) -> int:
 
     run_results: dict | None = None
     try:
-        with open("target/data-test/run_results.json") as f:
+        with open(runner_io.target_path("target/data-test/run_results.json")) as f:
             run_results = json.load(f)
     except (OSError, json.JSONDecodeError):
         _post(head_sha, "failure", "Gate 4: run_results.json missing or malformed")
         return 1
 
     summary = parse_data_test_results(run_results)
-    manifest_nodes = _load_manifest_nodes("target/data-test/manifest.json")
+    manifest_nodes = _load_manifest_nodes(runner_io.target_path("target/data-test/manifest.json"))
     summary["tests"] = enrich_tests_from_manifest(summary["tests"], manifest_nodes)
     summary["store_failures_config_ok"] = store_failures_config_ok
     summary.update({"gate": "4", "head_sha": head_sha})

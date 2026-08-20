@@ -10,6 +10,8 @@ import pathlib
 import re
 import shutil
 
+import runner_io
+
 
 def _load_artifacts(deployment_manifest_path: str) -> list[dict]:
     """Load the artifact list from the deployment manifest, or [] on read error."""
@@ -63,15 +65,22 @@ def setup_defer(prod_state_dir: str) -> list[str]:
     """Copy manifest_prod.json to target/prod-state-defer/manifest.json.
 
     Returns --defer --state args if the source file exists, otherwise [].
-    Used by Gates 2 and 4 for cross-workspace ref resolution.
+    Used by Gates 2, 3, and 4 for cross-workspace ref resolution.
+
+    The physical copy is written under $PROJ (VD-4637) since dbt (running with
+    --project-dir resolved from $PROJ) looks for --state relative to its own
+    project root. The returned --state value itself stays project-dir-relative
+    ("target/prod-state-defer", not PROJ-prefixed) because dbt joins
+    project_root / state_path internally — prefixing it here would double it up.
     """
     src = pathlib.Path(prod_state_dir) / "manifest_prod.json"
     if not src.exists():
         return []
-    dest_dir = pathlib.Path("target/prod-state-defer")
+    state_rel = "target/prod-state-defer"
+    dest_dir = pathlib.Path(runner_io.target_path(state_rel))
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy(src, dest_dir / "manifest.json")
-    return ["--defer", "--state", str(dest_dir)]
+    return ["--defer", "--state", state_rel]
 
 
 _REF_RE = re.compile(r"""ref\s*\(\s*['"](\w+)['"]""")

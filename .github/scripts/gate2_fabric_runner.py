@@ -162,7 +162,7 @@ def cmd_run_gate(args) -> int:
                 "--target", TARGET, "--target-path", "target/build",
             ], env=env)
             try:
-                with open("target/build/run_results.json") as f:
+                with open(runner_io.target_path("target/build/run_results.json")) as f:
                     build_run_results = json.load(f)
             except (OSError, json.JSONDecodeError):
                 pass
@@ -179,7 +179,7 @@ def cmd_run_gate(args) -> int:
                     "--target", TARGET, "--target-path", "target/clone",
                 ] + defer_args, env=env)
                 try:
-                    with open("target/clone/run_results.json") as f:
+                    with open(runner_io.target_path("target/clone/run_results.json")) as f:
                         clone_run_results = json.load(f)
                 except (OSError, json.JSONDecodeError):
                     pass
@@ -194,7 +194,7 @@ def cmd_run_gate(args) -> int:
                     "--target", TARGET, "--target-path", "target/build",
                 ] + defer_args, env=env)
                 try:
-                    with open("target/build/run_results.json") as f:
+                    with open(runner_io.target_path("target/build/run_results.json")) as f:
                         build_run_results = json.load(f)
                 except (OSError, json.JSONDecodeError):
                     pass
@@ -202,7 +202,7 @@ def cmd_run_gate(args) -> int:
                 # Build unmodified view models referenced as unit test fixture given
                 # inputs so Gate 3's get_columns_in_relation() can resolve them (VD-2375).
                 view_inputs = _select_unit_test_view_inputs(
-                    "target/build/manifest.json", set(names)
+                    runner_io.target_path("target/build/manifest.json"), set(names)
                 )
                 if view_inputs:
                     subprocess.run([
@@ -217,7 +217,7 @@ def cmd_run_gate(args) -> int:
                 # can resolve them (VD-2377). Uses dbt clone (not dbt run) since these
                 # materializations are clone-eligible.
                 table_inputs = _select_unit_test_table_inputs(
-                    "target/build/manifest.json", set(names)
+                    runner_io.target_path("target/build/manifest.json"), set(names)
                 )
                 if table_inputs:
                     subprocess.run([

@@ -72,7 +72,7 @@ def cmd_run_gate(args) -> int:
 
         run_results: dict | None = None
         try:
-            with open("target/unit/run_results.json") as f:
+            with open(runner_io.target_path("target/unit/run_results.json")) as f:
                 run_results = json.load(f)
         except (OSError, json.JSONDecodeError):
             pass

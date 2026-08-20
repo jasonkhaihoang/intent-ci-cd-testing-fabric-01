@@ -33,9 +33,11 @@ import sys
 from typing import List, Optional, Set, Tuple
 
 try:
+    from scripts import runner_io
     from scripts import shortcut_seeding_report
     from scripts.dbt_ls import run_dbt_ls
 except ImportError:  # invoked as `python3 path/to/derive_shortcuts.py`
+    import runner_io
     import shortcut_seeding_report
     from dbt_ls import run_dbt_ls
 
@@ -191,7 +193,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     prod_lakehouse_id = os.environ.get("PROD_LAKEHOUSE_ID", "")
 
     if _is_greenfield():
-        manifest_data = _read_json("target/manifest.json") or {}
+        manifest_data = _read_json(runner_io.target_path("target/manifest.json")) or {}
         source_items = sorted((manifest_data.get("sources") or {}).items())
         schema_enabled = _is_schema_enabled([n for _, n in source_items])
         shortcuts = [
@@ -208,7 +210,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         _write_report([], "no-modified-models")
         return 0
 
-    current_manifest = Manifest.from_path("target/manifest.json")
+    current_manifest = Manifest.from_path(runner_io.target_path("target/manifest.json"))
     prod_manifest = Manifest.from_path("prod-state/manifest.json")
 
     shortcuts, zero_state = derive_shortcuts(
