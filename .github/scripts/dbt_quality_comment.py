@@ -1,9 +1,13 @@
 """
 Parse dbt-project-evaluator results from DuckDB and post a PR comment.
 
-Queries the DuckDB file written by `dbt build --select dbt_project_evaluator`
-and summarises violations by category. Posts (or updates) a single PR comment.
-The workflow always exits 0 — violations are advisory and do not block merge.
+Queries the DuckDB file written by `dbt build --select dbt_project_evaluator
+--vars '{dbt_project_evaluator_enabled: true}'` and summarises violations by
+category. Posts (or updates) a single PR comment. The results path comes from
+DBT_QUALITY_DUCKDB_PATH — the same env var the dbt-quality profile consumes
+via env_var() — so the writer and this reader cannot drift to different
+filenames (AC-85). A missing/unreadable results database is reported as a
+problem, never rendered as an all-clear (AC-83/84).
 """
 
 import os
@@ -12,8 +16,6 @@ try:
     from scripts import pr_comment
 except ImportError:
     import pr_comment
-
-DUCKDB_PATH = "/tmp/vibedata_dbt_quality.duckdb"
 
 # Maps dbt-project-evaluator model name prefixes to display categories.
 CATEGORIES = {
@@ -28,18 +30,22 @@ EVALUATOR_DOCS_URL = "https://dbt-labs.github.io/dbt-project-evaluator/latest/"
 COMMENT_MARKER = "<!-- dbt-quality-evaluator -->"
 
 
-def query_violations(db_path: str) -> dict[str, list[dict]]:
+def query_violations(db_path: str) -> dict[str, list[dict]] | None:
     """
     Query each evaluator result model from DuckDB.
-    Returns {category_name: [row_dict, ...]} for models that have rows.
+
+    Returns {category_name: [row_dict, ...]} for models that have rows, or {}
+    when the database was read successfully and genuinely has none. Returns
+    None when the database is missing or could not be read — that "unread"
+    state must never be confused with a genuinely clean result (AC-83, AC-84).
     """
     try:
         import duckdb
     except ImportError:
-        return {}
+        return None
 
     if not os.path.exists(db_path):
-        return {}
+        return None
 
     results: dict[str, list[dict]] = {}
     try:
@@ -55,8 +61,9 @@ def query_violations(db_path: str) -> dict[str, list[dict]]:
             if rows:
                 results[category] = rows
         con.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        print(f"dbt quality results unreadable at {db_path}: {exc}", flush=True)
+        return None
     return results
 
 
@@ -74,7 +81,18 @@ def _violation_line(row: dict) -> str:
     return "- " + ", ".join(parts) if parts else "- (details unavailable)"
 
 
-def build_comment(violations: dict[str, list[dict]]) -> str:
+def build_comment(violations: dict[str, list[dict]] | None, db_path: str | None = None) -> str:
+    if violations is None:
+        where = f" at `{db_path}`" if db_path else ""
+        return f"""{COMMENT_MARKER}
+## dbt Project Evaluator (advisory) — ci/dbt-project-evaluate
+
+> ⚠️ **Results unreadable** — the evaluator's DuckDB results database{where} was
+> missing or could not be read. This is not a clean-project signal; treat it as
+> unverified and re-run once the underlying issue is fixed.
+> Reference: [dbt-project-evaluator docs]({EVALUATOR_DOCS_URL})
+"""
+
     all_categories = list(CATEGORIES.values())
 
     rows = []
@@ -116,10 +134,17 @@ def build_comment(violations: dict[str, list[dict]]) -> str:
 def main() -> None:
     pr_number = os.environ.get("PR_NUMBER", "")
     repo = os.environ.get("REPO", "")
+    # Required, no fallback: the same env var name the dbt-quality profile
+    # consumes via env_var() (AC-85) — a missing var fails loudly here rather
+    # than silently guessing a path that could drift from the writer again.
+    db_path = os.environ["DBT_QUALITY_DUCKDB_PATH"]
 
-    violations = query_violations(DUCKDB_PATH)
-    comment = build_comment(violations)
+    violations = query_violations(db_path)
+    comment = build_comment(violations, db_path)
     pr_comment.upsert(COMMENT_MARKER, comment, pr_number, repo)
+    if violations is None:
+        print(f"dbt quality results unreadable at {db_path}.", flush=True)
+        raise SystemExit(1)
     print("dbt quality PR comment posted.", flush=True)
 
 

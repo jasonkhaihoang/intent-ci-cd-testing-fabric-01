@@ -1,11 +1,15 @@
 # Profiles for dbt-project-quality.yml only.
 # Uses DuckDB — no Fabric connection. Isolated from fabricspark profiles
 # so dbt-duckdb does not need to be installed in the main CI provision job.
+#
+# path is DBT_QUALITY_DUCKDB_PATH (set in dbt-project-quality.yml's env:) —
+# the same variable dbt_quality_comment.py reads, so the writer and reader
+# cannot drift to different filenames again (VD-4731).
 dbt_project_quality_profile:
   outputs:
     dbt_quality:
       type: duckdb
-      path: /tmp/dbt_quality.duckdb
+      path: "{{ env_var('DBT_QUALITY_DUCKDB_PATH') }}"
       schema: main
       threads: 4
   target: dbt_quality
