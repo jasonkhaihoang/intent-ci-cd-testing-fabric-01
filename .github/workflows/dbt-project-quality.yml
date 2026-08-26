@@ -1,11 +1,13 @@
 # dbt Quality Workflow
 #
 # Runs dbt-project-evaluator on every PR using DuckDB (offline, no Fabric connection).
-# Runs in parallel with ci.yml — does not block merge.
-# Posts evaluation results as a PR comment (advisory only).
+# Runs in parallel with ci.yml — never gates a required branch-protection status,
+# so it never blocks merge. Posts evaluation results as a PR comment (advisory).
+# ci/dbt-project-evaluate can still report `failure` — e.g. when the evaluator's
+# results database is missing or unreadable (VD-4731) — as a visibility signal only.
 #
 # Part of the extensible dbt quality check series.
-# Design: docs/2026-04-16-dbt-quality-ci-workflow-design.md
+# Design: docs/design/Fabric/fabric-dbt-project-eval-ci-workflow-design.md
 
 name: dbt Quality
 
@@ -22,6 +24,10 @@ permissions:
 env:
   PYTHON_VERSION: "3.11"
   SCRIPTS: .github/scripts
+  # Single source of truth for the evaluator's results path (VD-4731) — the
+  # dbt-quality profile reads this via env_var(), dbt_quality_comment.py reads
+  # it via os.environ. Keep both in sync by changing only this line.
+  DBT_QUALITY_DUCKDB_PATH: /tmp/vibedata_dbt_quality.duckdb
 
 jobs:
   dbt-project-evaluate:
@@ -75,10 +81,17 @@ jobs:
             --quiet 2>/dev/null || true
 
       - name: Run dbt-project-evaluator
+        # A Studio-seeded dbt_project.yml gates the package off by default so it
+        # neither materializes into the domain's own schema nor reaches the
+        # generated docs site (VD-4701), so this step has to ask for it: without
+        # the var the selection resolves to zero nodes and the `|| true` hides it.
+        # The var is ignored by a project carrying no such gate, so it is safe
+        # against every domain repo regardless of when it was seeded.
         run: |
           dbt build \
             --project-dir "$PROJ" \
             --select dbt_project_evaluator \
+            --vars '{dbt_project_evaluator_enabled: true}' \
             --profiles-dir .github/profiles/dbt-quality \
             --profile dbt_project_quality_profile \
             --target dbt_quality \

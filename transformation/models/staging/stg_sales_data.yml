@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: stg_sales_data
+    description: >
+      One row per sale transaction. Staging layer that loads and exposes
+      the sales_data seed with consistent column naming.
+    columns:
+      - name: sale_id
+        description: Unique sale transaction identifier.
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: Customer identifier.
+      - name: product_id
+        description: Product identifier.
+      - name: sale_date
+        description: Date of the sale transaction.
+      - name: quantity
+        description: Number of units sold.
+      - name: unit_price
+        description: Price per unit.
+      - name: total_amount
+        description: Total sale amount (quantity * unit_price).
+      - name: region
+        description: Sales region (North, South, East, West).
+      - name: sales_rep
+        description: Name of the sales representative.

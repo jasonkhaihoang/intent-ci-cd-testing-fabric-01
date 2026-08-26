@@ -77,6 +77,13 @@ def _is_non_physical_model(node: dict) -> bool:
     return materialized in ("ephemeral", "view")
 
 
+def _is_seed_backed(node: dict, seed_backed_names: Set[str]) -> bool:
+    """True if `node`'s table name is materialized by a same-project `dbt seed`
+    (per Manifest.seed_table_names()) — the single seed-backed-source predicate
+    shared by both the greenfield and incremental derivation paths."""
+    return _node_table_name(node) in seed_backed_names
+
+
 def _shortcut_entry(
     node: dict,
     unique_id: str,
@@ -120,11 +127,14 @@ def derive_shortcuts(
     prod = prod_manifest if isinstance(prod_manifest, Manifest) else Manifest.from_dict(prod_manifest)
 
     modified_set = set(modified_unique_ids)
+    seed_backed = cur.seed_table_names()
     all_upstreams: Set[str] = set()
     for mid in modified_unique_ids:
         all_upstreams |= cur.upstreams_of(mid)
 
-    # Filter: drop modified-set members, seeds, views, and ephemeral models.
+    # Filter: drop modified-set members, seeds, views, ephemeral models, and
+    # sources materialized by a same-project seed (parity with the greenfield
+    # branch of main(), which applies the same _is_seed_backed predicate).
     candidates: List[Tuple[str, dict]] = []
     for uid in all_upstreams:
         if uid in modified_set:
@@ -138,6 +148,8 @@ def derive_shortcuts(
         if _is_non_physical_model(node):
             continue
         if not uid.startswith("source."):
+            continue
+        if _is_seed_backed(node, seed_backed):
             continue
         candidates.append((uid, node))
 
@@ -200,7 +212,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         source_items = sorted(
             (uid, node)
             for uid, node in (manifest_data.get("sources") or {}).items()
-            if _node_table_name(node) not in seed_backed
+            if not _is_seed_backed(node, seed_backed)
         )
         schema_enabled = _is_schema_enabled([n for _, n in source_items])
         shortcuts = [

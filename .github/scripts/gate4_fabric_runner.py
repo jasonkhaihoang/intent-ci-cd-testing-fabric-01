@@ -53,7 +53,8 @@ def _load_dbt_project(path: str) -> dict:
 
 def cmd_run_gate(args) -> int:
     head_sha = args.head_sha
-    dbt_project = _load_dbt_project(args.dbt_project)
+    dbt_project_path = args.dbt_project or runner_io.target_path("dbt_project.yml")
+    dbt_project = _load_dbt_project(dbt_project_path)
     store_failures_config_ok = check_store_failures_config(dbt_project)
     if not store_failures_config_ok:
         print("Advisory: dbt_project.yml missing store_failures config. Gate unaffected.", flush=True)
@@ -130,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--head-sha", required=True)
     p.add_argument("--deployment-manifest", required=True)
     p.add_argument("--prod-state-dir", default="prod-state")
-    p.add_argument("--dbt-project", default="dbt_project.yml")
+    p.add_argument("--dbt-project", default=None)
     p.add_argument("--profiles-dir", default=".github/profiles")
     p.add_argument("--output", default=None)
     args = parser.parse_args(argv)

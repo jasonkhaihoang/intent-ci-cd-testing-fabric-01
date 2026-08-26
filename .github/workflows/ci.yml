@@ -237,7 +237,12 @@ jobs:
           EOF
 
       - name: Run ADR numbering check
-        run: python3 ${{ env.SCRIPTS }}/adr_lint.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 ${{ env.SCRIPTS }}/adr_lint.py \
+            --pr-number "${{ github.event.pull_request.number }}"
 
       - name: Emit ci/adr-numbering success
         if: success()
@@ -1477,7 +1482,11 @@ jobs:
   gate-3-unit-comment:
     name: "gate-3-unit comment"
     needs: [preflight, gate-2-write, gate-3-unit]
-    if: always()
+    # VD-3225 precedent (see gate-1-comment): a bare if: always() also fires on
+    # the `closed` action a merge/close triggers, when gate-3-unit is natively
+    # skipped and never produced reports/gate-3.json — posting the generic
+    # "did not succeed" fallback over whatever real result was already there.
+    if: always() && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - if: vars.FAKE_WORLD == ''
@@ -1704,7 +1713,12 @@ jobs:
   gate-4-data-test-comment:
     name: "gate-4-data-test comment"
     needs: [preflight, gate-2-write, gate-4-data-test]
-    if: always()
+    # VD-3225 precedent (see gate-1-comment): a bare if: always() also fires on
+    # the `closed` action a merge/close triggers, when gate-4-data-test is
+    # natively skipped and never produced reports/gate-4.json — posting the
+    # generic "did not succeed" fallback over whatever real result was already
+    # there.
+    if: always() && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - if: vars.FAKE_WORLD == ''
