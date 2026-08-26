@@ -1,0 +1,11 @@
+sale_id,customer_id,product_id,sale_date,quantity,unit_price,total_amount,region,sales_rep
+1,101,501,2024-01-15,2,100.00,200.00,North,Alice Johnson
+2,102,502,2024-01-16,1,250.00,250.00,South,Bob Smith
+3,103,501,2024-01-17,3,100.00,300.00,East,Alice Johnson
+4,101,503,2024-01-18,1,150.00,150.00,North,Carol Davis
+5,104,502,2024-01-19,2,250.00,500.00,West,Bob Smith
+6,105,504,2024-01-20,5,50.00,250.00,South,Dave Wilson
+7,102,501,2024-01-21,1,100.00,100.00,South,Alice Johnson
+8,106,503,2024-01-22,2,150.00,300.00,East,Carol Davis
+9,103,504,2024-01-23,3,50.00,150.00,East,Dave Wilson
+10,107,502,2024-01-24,1,250.00,250.00,West,Bob Smith
