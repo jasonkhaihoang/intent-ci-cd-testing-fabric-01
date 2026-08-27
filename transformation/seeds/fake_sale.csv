@@ -1,0 +1,21 @@
+order_id,customer_name,product_category,product_name,order_date,quantity,unit_price,total_amount,payment_method,region,sales_channel
+1001,John Smith,Electronics,Laptop,2024-01-05,1,1299.99,1299.99,Credit Card,North,Online
+1002,Sarah Johnson,Clothing,Winter Jacket,2024-01-07,2,89.99,179.98,Debit Card,South,In-Store
+1003,Michael Brown,Electronics,Smartphone,2024-01-08,1,899.99,899.99,Credit Card,East,Online
+1004,Emily Davis,Home & Garden,Coffee Maker,2024-01-10,1,79.99,79.99,Cash,West,In-Store
+1005,David Wilson,Electronics,Tablet,2024-01-12,3,499.99,1499.97,Credit Card,North,Online
+1006,Jessica Martinez,Clothing,Running Shoes,2024-01-14,1,129.99,129.99,Debit Card,South,In-Store
+1007,Robert Taylor,Books,Programming Guide,2024-01-15,2,49.99,99.98,Credit Card,East,Online
+1008,Lisa Anderson,Home & Garden,Blender,2024-01-17,1,59.99,59.99,Cash,West,In-Store
+1009,William Thomas,Electronics,Headphones,2024-01-19,4,199.99,799.96,Credit Card,North,Online
+1010,Jennifer Jackson,Clothing,Dress Shirt,2024-01-21,3,59.99,179.97,Debit Card,South,In-Store
+1011,James White,Books,Data Science Handbook,2024-01-23,1,79.99,79.99,Credit Card,East,Online
+1012,Maria Harris,Home & Garden,Vacuum Cleaner,2024-01-25,1,299.99,299.99,Credit Card,West,In-Store
+1013,Charles Martin,Electronics,Smart Watch,2024-01-27,2,349.99,699.98,Debit Card,North,Online
+1014,Patricia Thompson,Clothing,Jeans,2024-01-29,2,79.99,159.98,Cash,South,In-Store
+1015,Daniel Garcia,Books,AI Fundamentals,2024-02-01,1,89.99,89.99,Credit Card,East,Online
+1016,Nancy Rodriguez,Home & Garden,Toaster,2024-02-03,1,39.99,39.99,Debit Card,West,In-Store
+1017,Matthew Martinez,Electronics,Wireless Earbuds,2024-02-05,5,149.99,749.95,Credit Card,North,Online
+1018,Betty Anderson,Clothing,Sneakers,2024-02-07,1,99.99,99.99,Cash,South,In-Store
+1019,Anthony Taylor,Books,Machine Learning Guide,2024-02-09,2,69.99,139.98,Credit Card,East,Online
+1020,Dorothy Thomas,Home & Garden,Microwave,2024-02-11,1,149.99,149.99,Debit Card,West,In-Store

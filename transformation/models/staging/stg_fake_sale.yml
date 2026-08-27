@@ -1,0 +1,53 @@
+version: 2
+
+models:
+  - name: stg_fake_sale
+    description: >
+      One row per sale order. Staging layer that loads and exposes
+      the fake_sale seed with consistent column naming and types.
+    columns:
+      - name: order_id
+        description: Unique order identifier.
+        tests:
+          - not_null
+          - unique
+      - name: customer_name
+        description: Name of the customer who placed the order.
+        tests:
+          - not_null
+      - name: product_category
+        description: Product category (Electronics, Clothing, Home & Garden, Books).
+        tests:
+          - not_null
+      - name: product_name
+        description: Name of the product sold.
+        tests:
+          - not_null
+      - name: order_date
+        description: Date when the order was placed.
+        tests:
+          - not_null
+      - name: quantity
+        description: Number of units ordered.
+        tests:
+          - not_null
+      - name: unit_price
+        description: Price per unit.
+        tests:
+          - not_null
+      - name: total_amount
+        description: Total sale amount (quantity * unit_price).
+        tests:
+          - not_null
+      - name: payment_method
+        description: Payment method used (Credit Card, Debit Card, Cash).
+        tests:
+          - not_null
+      - name: region
+        description: Sales region (North, South, East, West).
+        tests:
+          - not_null
+      - name: sales_channel
+        description: Sales channel (Online, In-Store).
+        tests:
+          - not_null
