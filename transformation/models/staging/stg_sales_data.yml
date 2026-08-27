@@ -13,17 +13,39 @@ models:
           - unique
       - name: customer_id
         description: Customer identifier.
+        tests:
+          - not_null
       - name: product_id
         description: Product identifier.
+        tests:
+          - not_null
       - name: sale_date
         description: Date of the sale transaction.
+        tests:
+          - not_null
       - name: quantity
         description: Number of units sold.
+        tests:
+          - not_null
       - name: unit_price
         description: Price per unit.
+        tests:
+          - not_null
       - name: total_amount
         description: Total sale amount (quantity * unit_price).
+        tests:
+          - not_null
       - name: region
         description: Sales region (North, South, East, West).
+        tests:
+          - not_null
       - name: sales_rep
         description: Name of the sales representative.
+        tests:
+          - not_null
+      - name: payment_method
+        description: Payment method used (Credit Card, Wire Transfer, Net 30).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['Credit Card', 'Wire Transfer', 'Net 30']

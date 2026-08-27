@@ -1,0 +1,69 @@
+version: 2
+
+models:
+  - name: fct_sales
+    description: >
+      Fact table for sales transactions with enriched dimensions and analytics.
+      One row per sale with customer behavior metrics, time dimensions, and value tiers.
+    columns:
+      - name: sale_id
+        description: Unique sale transaction identifier (primary key).
+        tests:
+          - not_null
+          - unique
+      - name: customer_id
+        description: Customer identifier (foreign key to customer dimension).
+        tests:
+          - not_null
+      - name: product_id
+        description: Product identifier (foreign key to product dimension).
+        tests:
+          - not_null
+      - name: sale_date_key
+        description: Sale date as DATE type for time-series analysis.
+        tests:
+          - not_null
+      - name: sale_year
+        description: Year extracted from sale_date for time-series grouping.
+      - name: sale_month
+        description: Month (1-12) extracted from sale_date.
+      - name: sale_quarter
+        description: Quarter (1-4) extracted from sale_date.
+      - name: quantity
+        description: Number of units sold in this transaction.
+        tests:
+          - not_null
+      - name: unit_price
+        description: Price per unit at time of sale.
+        tests:
+          - not_null
+      - name: total_amount
+        description: Total sale amount (quantity * unit_price).
+        tests:
+          - not_null
+      - name: region
+        description: Sales region (North, South, East, West).
+        tests:
+          - not_null
+      - name: sales_rep
+        description: Name of the sales representative who closed the sale.
+        tests:
+          - not_null
+      - name: payment_method
+        description: Payment method used (Credit Card, Wire Transfer, Net 30).
+        tests:
+          - not_null
+      - name: customer_cumulative_revenue
+        description: Running total of revenue for this customer up to this sale.
+      - name: customer_order_sequence
+        description: Sequential order number for this customer (1 = first order).
+      - name: region_3day_avg_revenue
+        description: 3-day rolling average of sale amounts within the same region.
+      - name: sale_tier
+        description: >
+          Sale value tier based on total_amount: High Value (>=500),
+          Medium Value (>=200), Standard (<200).
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['High Value', 'Medium Value', 'Standard']

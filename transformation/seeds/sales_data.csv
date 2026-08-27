@@ -1,11 +1,26 @@
-sale_id,customer_id,product_id,sale_date,quantity,unit_price,total_amount,region,sales_rep
-1,101,501,2024-01-15,2,100.00,200.00,North,Alice Johnson
-2,102,502,2024-01-16,1,250.00,250.00,South,Bob Smith
-3,103,501,2024-01-17,3,100.00,300.00,East,Alice Johnson
-4,101,503,2024-01-18,1,150.00,150.00,North,Carol Davis
-5,104,502,2024-01-19,2,250.00,500.00,West,Bob Smith
-6,105,504,2024-01-20,5,50.00,250.00,South,Dave Wilson
-7,102,501,2024-01-21,1,100.00,100.00,South,Alice Johnson
-8,106,503,2024-01-22,2,150.00,300.00,East,Carol Davis
-9,103,504,2024-01-23,3,50.00,150.00,East,Dave Wilson
-10,107,502,2024-01-24,1,250.00,250.00,West,Bob Smith
+sale_id,customer_id,product_id,sale_date,quantity,unit_price,total_amount,region,sales_rep,payment_method
+1,101,501,2024-01-15,2,100.00,200.00,North,Alice Johnson,Credit Card
+2,102,502,2024-01-16,1,250.00,250.00,South,Bob Smith,Wire Transfer
+3,103,501,2024-01-17,3,100.00,300.00,East,Alice Johnson,Credit Card
+4,101,503,2024-01-18,1,150.00,150.00,North,Carol Davis,Net 30
+5,104,502,2024-01-19,2,250.00,500.00,West,Bob Smith,Credit Card
+6,105,504,2024-01-20,5,50.00,250.00,South,Dave Wilson,Wire Transfer
+7,102,501,2024-01-21,1,100.00,100.00,South,Alice Johnson,Credit Card
+8,106,503,2024-01-22,2,150.00,300.00,East,Carol Davis,Net 30
+9,103,504,2024-01-23,3,50.00,150.00,East,Dave Wilson,Credit Card
+10,107,502,2024-01-24,1,250.00,250.00,West,Bob Smith,Wire Transfer
+11,108,505,2024-02-01,4,75.00,300.00,North,Alice Johnson,Credit Card
+12,109,501,2024-02-03,2,100.00,200.00,South,Bob Smith,Net 30
+13,110,506,2024-02-05,1,500.00,500.00,East,Carol Davis,Wire Transfer
+14,101,502,2024-02-07,3,250.00,750.00,West,Dave Wilson,Credit Card
+15,111,503,2024-02-10,2,150.00,300.00,North,Alice Johnson,Credit Card
+16,112,504,2024-02-12,6,50.00,300.00,South,Bob Smith,Net 30
+17,103,505,2024-02-15,1,75.00,75.00,East,Carol Davis,Credit Card
+18,113,501,2024-02-18,4,100.00,400.00,West,Dave Wilson,Wire Transfer
+19,114,506,2024-02-20,2,500.00,1000.00,North,Alice Johnson,Credit Card
+20,115,502,2024-02-22,1,250.00,250.00,South,Bob Smith,Credit Card
+21,101,503,2024-03-01,3,150.00,450.00,East,Carol Davis,Net 30
+22,116,504,2024-03-05,2,50.00,100.00,West,Dave Wilson,Credit Card
+23,117,501,2024-03-08,1,100.00,100.00,North,Alice Johnson,Wire Transfer
+24,118,505,2024-03-10,5,75.00,375.00,South,Bob Smith,Credit Card
+25,119,506,2024-03-12,1,500.00,500.00,East,Carol Davis,Net 30

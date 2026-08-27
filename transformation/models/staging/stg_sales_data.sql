@@ -6,10 +6,11 @@ SELECT
     sale_id,
     customer_id,
     product_id,
-    sale_date,
+    CAST(sale_date AS DATE) AS sale_date,
     quantity,
     unit_price,
     total_amount,
     region,
-    sales_rep
+    sales_rep,
+    payment_method
 FROM {{ ref('sales_data') }}
