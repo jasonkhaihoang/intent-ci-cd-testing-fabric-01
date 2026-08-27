@@ -2,7 +2,7 @@
 # The VD_DOMAIN_* coordinate keys are Studio-owned and CONVERGE on every spawn;
 # the per-platform GHA Variable/Secret name-indirection keys (ADR-0018) are
 # seeded once and preserved thereafter (VD-3364 AC, ADR-0019).
-VD_DOMAIN_DATA_PLATFORM: fabric_lakehouse
+VD_DOMAIN_DATA_PLATFORM: fabric
 VD_DOMAIN_SLUG: fabric-domain-01
 VD_DOMAIN_SCHEMA: dbo
 VD_DOMAIN_FABRIC_WORKSPACE_ID: 7aeb9e12-8ad0-421d-82ad-262512491e16
