@@ -4,11 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'models/**'
-      - 'snapshots/**'
-      - 'sources/**'
-      - 'dbt_project.yml'
-      - 'packages.yml'
+      - 'transformation/**'
       - '.github/profiles/profiles.yml'
   workflow_dispatch:
 
