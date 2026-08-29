@@ -5,6 +5,8 @@ models:
     description: >
       One row per sale transaction. Staging layer that loads and exposes
       the sales_data seed with consistent column naming.
+    meta:
+      owner: "@jasonkhaihoang"
     columns:
       - name: sale_id
         description: Unique sale transaction identifier.

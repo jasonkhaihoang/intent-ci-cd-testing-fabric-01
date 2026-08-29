@@ -4,11 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'models/**'
-      - 'snapshots/**'
-      - 'sources/**'
-      - 'dbt_project.yml'
-      - 'packages.yml'
+      - 'transformation/**'
       - '.github/profiles/profiles.yml'
   workflow_dispatch:
 
@@ -45,15 +41,15 @@ jobs:
           with open(os.environ.get("CICFG", ".workflow/ci-config.yml")) as f:
               config = yaml.safe_load(f) or {}
 
-          workspace_id   = config.get("VD_DOMAIN_FABRIC_WORKSPACE_ID", "")
-          workspace_name = config.get("VD_DOMAIN_FABRIC_WORKSPACE_NAME", "")
+          workspace_id   = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_ID", "")
+          workspace_name = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME", "")
           lakehouse_id   = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_ID", "")
           lakehouse      = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_NAME", "")
           schema         = "dummy"  # AC-64: VD_DOMAIN_SCHEMA dropped — confirmed dead,
                                      # matches the ephemeral profile's own placeholder convention
 
           if not all([workspace_id, workspace_name, lakehouse_id, lakehouse]):
-              print("ci-config.yml missing VD_DOMAIN_FABRIC_WORKSPACE_ID / VD_DOMAIN_FABRIC_WORKSPACE_NAME / VD_DOMAIN_FABRIC_LAKEHOUSE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_NAME — cannot generate prod-manifest profile.", flush=True)
+              print("ci-config.yml missing VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME / VD_DOMAIN_FABRIC_LAKEHOUSE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_NAME — cannot generate prod-manifest profile.", flush=True)
               sys.exit(1)
 
           with open(".github/profiles/profiles.yml") as f:

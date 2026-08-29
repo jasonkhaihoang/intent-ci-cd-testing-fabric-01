@@ -456,7 +456,7 @@ jobs:
         if: always() && steps.fetch.outputs.greenfield_fallback != 'true' && hashFiles('prod-state/manifest.json') != ''
         run: |
           dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile 2>&1 | tail -3 || true
-          modified=$(dbt ls --select state:modified+ --state prod-state \
+          modified=$(dbt ls --select state:modified+ --state "$(pwd)/prod-state" \
                        --project-dir "$PROJ" \
                        --profiles-dir .github/profiles --target dbt_fabric_compile \
                        --output name 2>/dev/null | grep -v '^\(Running\|Found\|Update\)' || true)
