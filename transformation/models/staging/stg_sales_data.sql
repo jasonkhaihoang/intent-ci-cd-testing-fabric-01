@@ -13,3 +13,4 @@ SELECT
     region,
     sales_rep
 FROM {{ ref('sales_data') }}
+-- VD-4994 validation bump
