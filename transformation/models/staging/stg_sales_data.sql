@@ -14,3 +14,4 @@ SELECT
     sales_rep
 FROM {{ ref('sales_data') }}
 -- VD-4994 validation bump
+-- VD-5013 validation bump
