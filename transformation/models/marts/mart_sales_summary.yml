@@ -1,0 +1,16 @@
+version: 2
+
+models:
+  - name: mart_sales_summary
+    description: >
+      VD-5657 fixture model. Aggregates stg_sales_data by region to exercise
+      --defer resolution in a downstream table-materialized model.
+    meta:
+      owner: "@jasonkhaihoang"
+    columns:
+      - name: region
+        description: Sales region.
+      - name: n_sales
+        description: Count of sale transactions in the region.
+      - name: total_amount
+        description: Sum of total_amount in the region.
