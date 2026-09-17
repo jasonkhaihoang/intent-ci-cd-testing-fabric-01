@@ -18,6 +18,52 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import CancelledError
+
+
+class ConditionalWriteUnsupported(RuntimeError):
+    """The provider explicitly rejected a required write condition."""
+
+
+def blob_request(method, workspace, path, *, data=None, headers=None, params=None, limit=4096):
+    """One bounded Blob request; authenticated error bodies never enter deploy output."""
+    base = os.environ.get("ONELAKE_BLOB_BASE_URL", "https://onelake.blob.fabric.microsoft.com")
+    url = base.rstrip("/") + "/" + urllib.parse.quote(workspace, safe="")
+    if path:
+        url += "/" + urllib.parse.quote(path, safe="/")
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    try:
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {get_token('storage')}")
+        req.add_header("x-ms-version", "2021-12-02")
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
+        with urllib.request.urlopen(req, timeout=60) as response:
+            rejected = {s.strip().lower() for s in response.headers.get("x-ms-rejected-headers", "").split(",")}
+            if rejected & {"if-match", "if-none-match", "x-ms-blob-type"}:
+                raise ConditionalWriteUnsupported("OneLake rejected a required Blob write condition")
+            size = response.headers.get("Content-Length")
+            if size is not None and (int(size) < 0 or int(size) > limit):
+                raise ValueError("Blob response exceeds bounds")
+            body = response.read(limit + 1)
+            if len(body) > limit:
+                raise ValueError("Blob response exceeds bounds")
+            return body, response.headers
+    except (CancelledError, ConditionalWriteUnsupported):
+        raise
+    except urllib.error.HTTPError as exc:
+        status, code = exc.code, exc.headers.get("x-ms-error-code", "")
+        exc.close()
+        if code in ("UnsupportedHeader", "UnsupportedOperation", "NotImplemented"):
+            raise ConditionalWriteUnsupported("OneLake rejected the required Blob operation") from None
+        if status == 404 and code in ("BlobNotFound", "PathNotFound", "ResourceNotFound"):
+            raise FileNotFoundError("ingestion provider path not found") from None
+        if method == "PUT" and status in (409, 412) and code in ("BlobAlreadyExists", "PathAlreadyExists", "ConditionNotMet", "TargetConditionNotMet"):
+            raise FileExistsError("conditional ingestion write conflict") from None
+        raise RuntimeError(f"ingestion Blob operation failed (HTTP {status})") from None
+    except Exception as exc:
+        raise RuntimeError(f"ingestion Blob operation failed ({type(exc).__name__})") from None
 
 def _fabric_api_base() -> str:
     """Read FABRIC_API_BASE_URL per call (not at import time) so a fake-world
