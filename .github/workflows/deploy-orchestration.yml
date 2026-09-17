@@ -1,0 +1,65 @@
+# Production deploy for committed Fabric orchestration items (VD-4729).
+#
+# Deployment publishes code objects; orchestration runs them afterwards. This
+# workflow only ever publishes: it applies the committed items and reconciles
+# their schedules. It never triggers a run — cadence fires from the reconciled
+# schedule, in production only.
+name: Deploy Orchestration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'orchestration/**'
+      - 'transformation/**'
+      - 'ingestion/**'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Apply even when the packaged contentHash is unchanged'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # GitHub OIDC -> Azure login; no SPN secret is stored
+
+concurrency:
+  # One deploy at a time per branch: two concurrent applies could interleave
+  # definition writes and schedule reconciliation on the same items.
+  group: deploy-orchestration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # act binds the workspace directly and the fake world serves tokens through
+      # an `az` shim, so both of these are real-world-only — the same gating every
+      # other fake-world-tested workflow in this bundle applies.
+      - uses: actions/checkout@v5
+        if: vars.FAKE_WORLD == ''
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Azure login (OIDC)
+        if: vars.FAKE_WORLD == ''
+        uses: azure/login@v3
+        with:
+          tenant-id: ${{ vars.CD_TENANT_ID }}
+          client-id: ${{ vars.CD_SPN_CLIENT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Deploy committed orchestration items
+        env:
+          # The one per-environment binding that is never committed.
+          VD_DBTJOB_CONNECTION_ID: ${{ vars.VD_DBTJOB_CONNECTION_ID }}
+          VD_DBT_PROFILE_JSON: ${{ vars.VD_DBT_PROFILE_JSON }}
+        run: |
+          python3 .github/scripts/deploy_orchestration.py \
+            --repo-root . \
+            --workspace-id "${{ vars.VD_PROD_WORKSPACE_ID }}" \
+            --enable-schedules \
+            ${{ inputs.force && '--force' || '' }}
