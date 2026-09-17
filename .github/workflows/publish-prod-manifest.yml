@@ -56,7 +56,7 @@ jobs:
               profiles = yaml.safe_load(f)
 
           profile_name = next(iter(profiles))
-          profiles[profile_name]["outputs"]["prod_manifest"] = {
+          profiles[profile_name]["outputs"]["prod"] = {
               "type": "fabricspark",
               "method": "az_cli",
               "workspaceid": workspace_id,
@@ -72,7 +72,7 @@ jobs:
           with open("/tmp/prod-profiles/profiles.yml", "w") as f:
               yaml.dump(profiles, f)
 
-          print(f"prod_manifest target: {profile_name} → {workspace_name}.{lakehouse}.{schema}", flush=True)
+          print(f"prod target: {profile_name} → {workspace_name}.{lakehouse}.{schema}", flush=True)
 
           github_env = os.environ.get("GITHUB_ENV", "")
           if github_env:
@@ -88,16 +88,43 @@ jobs:
           mkdir -p /tmp/prod-manifests
           cp "$PROJ/target/manifest.json" /tmp/prod-manifests/manifest.json
 
-      - name: Parse dbt project — prod target
+      # AC-13: give every node a workspace_name config before the prod-target parse, so
+      # manifest_prod.json's nodes resolve deferred references to production rather than
+      # falling back to the consuming run's own (ephemeral) target. This patches the
+      # runner's checkout only — never committed to the domain repo — and runs after the
+      # compile-target parse above, so manifest.json (the selection manifest) is unaffected.
+      - name: Inject workspace_name for prod-target parse
         env:
           PROD_WORKSPACE_NAME: ${{ env.PROD_WORKSPACE_NAME }}
         run: |
-          dbt parse --project-dir "$PROJ" --profiles-dir /tmp/prod-profiles --target prod_manifest --quiet
+          python3 - <<'PYEOF'
+          import yaml, os
+
+          proj = os.environ.get("PROJ", ".")
+          workspace_name = os.environ["PROD_WORKSPACE_NAME"]
+          project_yml_path = os.path.join(proj, "dbt_project.yml")
+
+          with open(project_yml_path) as f:
+              project = yaml.safe_load(f)
+
+          project_name = project["name"]
+          project_models_cfg = project.setdefault("models", {}).setdefault(project_name, {})
+          project_models_cfg["+workspace_name"] = workspace_name
+
+          with open(project_yml_path, "w") as f:
+              yaml.dump(project, f)
+
+          print(f"Injected +workspace_name: {workspace_name} into {project_yml_path} for the prod-target parse only", flush=True)
+          PYEOF
+
+      - name: Parse dbt project — prod target
+        run: |
+          dbt parse --project-dir "$PROJ" --profiles-dir /tmp/prod-profiles --target prod --quiet
           cp "$PROJ/target/manifest.json" /tmp/prod-manifests/manifest_prod.json
 
       - name: Generate dbt Docs static site
         run: |
-          dbt docs generate --project-dir "$PROJ" --profiles-dir /tmp/prod-profiles --target prod_manifest --static --empty-catalog --no-compile --quiet
+          dbt docs generate --project-dir "$PROJ" --profiles-dir /tmp/prod-profiles --target prod --static --empty-catalog --no-compile --quiet
 
       # Stage both manifests beside the docs site so one publish call uploads all three.
       # The copy is not redundant: `$PROJ/target/manifest.json` currently holds the

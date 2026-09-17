@@ -144,7 +144,6 @@ def main():
     # Deprecated: superseded by per-gate comments posted directly from each CI job.
     # The notify CI job has been removed. This function is retained only for
     # backward compatibility with any external callers; do not invoke from CI.
-    workspace_id = os.environ.get("EPHEMERAL_WORKSPACE_ID", "")
     workspace_name = os.environ.get("EPHEMERAL_WORKSPACE_NAME", "")
     head_branch = os.environ.get("HEAD_BRANCH", "")
     pr_number = os.environ.get("PR_NUMBER", "")
@@ -162,7 +161,7 @@ def main():
     gate_3 = load_report("reports/gate-3.json") or None
     gate_4 = load_report("reports/gate-4.json") or None
 
-    workspace_comment = build_comment(workspace_id, workspace_name, head_branch, greenfield_fallback)
+    workspace_comment = build_comment(workspace_name, head_branch, greenfield_fallback)
     details_comment = build_details_comment(
         ruff=ruff,
         sqlfluff=sqlfluff_report,
@@ -185,7 +184,6 @@ def main():
 
 def post_workspace_comment_only():
     """Post only the workspace comment — used by the provision job step."""
-    workspace_id = os.environ.get("EPHEMERAL_WORKSPACE_ID", "")
     workspace_name = os.environ.get("EPHEMERAL_WORKSPACE_NAME", "")
     head_branch = os.environ.get("HEAD_BRANCH", "")
     pr_number = os.environ.get("PR_NUMBER", "")
@@ -195,22 +193,15 @@ def post_workspace_comment_only():
     provision_failed = provision_outcome != "success"
     run_url = os.environ.get("RUN_URL", "")
 
-    interactive_notebook_id = os.environ.get("INTERACTIVE_NOTEBOOK_ID", "")
-    notebook_url = ""
-    if interactive_notebook_id and workspace_id:
-        notebook_url = f"https://app.fabric.microsoft.com/groups/{workspace_id}/synapsenotebooks/{interactive_notebook_id}?experience=fabric-developer"
-
     if provision_failed:
         workspace_comment = render_provision_failed(
             workspace_name=workspace_name,
-            workspace_id=workspace_id,
             head_branch=head_branch,
             run_url=run_url,
         )
     else:
         workspace_comment = build_comment(
-            workspace_id, workspace_name, head_branch, greenfield_fallback,
-            notebook_url=notebook_url,
+            workspace_name, head_branch, greenfield_fallback,
         )
         shortcut_seeding = load_report("reports/shortcut_seeding.json")
         shortcut_section = format_shortcut_seeding(shortcut_seeding)
