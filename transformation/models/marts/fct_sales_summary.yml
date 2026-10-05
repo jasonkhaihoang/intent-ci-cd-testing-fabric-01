@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: fct_sales_summary
+    description: One row per sales region with its sale count and revenue.
+    meta:
+      owner: "@jasonkhaihoang"
+    columns:
+      - name: region
+        description: Sales region (North, South, East, West).
+        tests:
+          - not_null
+          - unique
+      - name: sale_count
+        description: Number of sales in the region.
+      - name: revenue
+        description: Sum of the sales' total amounts.

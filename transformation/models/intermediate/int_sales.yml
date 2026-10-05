@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: int_sales_enriched
+    description: One row per sale transaction, with the computed line amount (quantity * unit_price).
+    meta:
+      owner: "@jasonkhaihoang"
+    columns:
+      - name: sale_id
+        description: Unique sale transaction identifier.
+        tests:
+          - not_null
+          - unique
+      - name: line_amount
+        description: Quantity times unit price.
+  - name: int_sales_valid
+    description: The sales downstream models may rely on, one row per sale transaction.
+    meta:
+      owner: "@jasonkhaihoang"
+    columns:
+      - name: sale_id
+        description: Unique sale transaction identifier.
+        tests:
+          - not_null
+          - unique
+  - name: int_sales_regional
+    description: One row per sale transaction with its sales region.
+    meta:
+      owner: "@jasonkhaihoang"
+    columns:
+      - name: sale_id
+        description: Unique sale transaction identifier.
+        tests:
+          - not_null
+          - unique
+      - name: region
+        description: Sales region (North, South, East, West).
