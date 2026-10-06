@@ -10,6 +10,7 @@ Commands:
 
   cleanup           --repo OWNER/REPO
                    List all vibedata_ephemeral_* workspaces. Delete those whose PR is closed.
+                   Delegates to the shared fabric_workspace_cleanup module.
 
 Authentication: GitHub OIDC via azure/login. No SPN credentials stored.
 The workflow runs azure/login before invoking this script, establishing an
@@ -33,15 +34,16 @@ import yaml
 
 try:
     from scripts import fabric_transport
+    from scripts import fabric_workspace_cleanup
     from scripts import runner_io
     from scripts import shortcut_seeding_report
 except ImportError:  # invoked as `python3 path/to/fabric_api.py`
     import fabric_transport
+    import fabric_workspace_cleanup
     import runner_io
     import shortcut_seeding_report
 
 
-GITHUB_API = "https://api.github.com"
 ONELAKE_DFS = os.environ.get("ONELAKE_DFS_BASE_URL", "https://onelake.dfs.fabric.microsoft.com")
 
 # ─── Workspace helpers ─────────────────────────────────────────────────────────
@@ -115,93 +117,11 @@ def cmd_teardown(args):
 
 
 
-def workspace_decision(pr_state, target_pr_number, pr_number):
-    """Pure decision function for a single workspace.
-
-    Returns (reason, should_delete) where reason is one of:
-      "skip"     - not the targeted PR (targeted mode only)
-      "orphaned" - PR not found on GitHub
-      "closed"   - PR is closed or merged
-      "active"   - open PR (always retained regardless of commit age)
-    """
-    if target_pr_number is not None and str(pr_number) != str(target_pr_number):
-        return "skip", False
-    if pr_state == "not_found":
-        return "orphaned", True
-    if pr_state == "api_error":
-        return "active", False  # can't determine state; keep safe
-    if pr_state == "closed":
-        return "closed", True
-    # open PR — retained regardless of commit age
-    return "active", False
-
-
-def _fetch_pr_info(repo, pr_number, gh_token):
-    """Return (state, head_sha). state is 'open', 'closed', 'not_found', or 'api_error'."""
-    url = f"{GITHUB_API}/repos/{repo}/pulls/{pr_number}"
-    req = urllib.request.Request(url)
-    req.add_header("Authorization", f"Bearer {gh_token}")
-    req.add_header("Accept", "application/vnd.github+json")
-    try:
-        with urllib.request.urlopen(req) as r:
-            data = json.loads(r.read())
-            return data.get("state", "unknown"), data.get("head", {}).get("sha")
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return "not_found", None
-        return "api_error", None
-
-
 def cmd_cleanup(args):
-    gh_token = os.environ.get("GH_TOKEN", "")
-    repo = args.repo
-    target_pr = getattr(args, "pr_number", None)
-
-    resp = fabric_transport.request("GET", "/workspaces")
-    ephemeral = [
-        ws for ws in resp.get("value", [])
-        if ws["displayName"].startswith("vibedata_ephemeral_")
-    ]
-    print(f"Found {len(ephemeral)} ephemeral workspace(s).", flush=True)
-
-    audit_log = []
-    has_failure = False
-
-    for ws in ephemeral:
-        name = ws["displayName"]
-        parts = name.split("_")
-        if len(parts) < 3 or not parts[-1].isdigit():
-            continue
-        pr_number = parts[-1]
-
-        pr_state, _head_sha = _fetch_pr_info(repo, pr_number, gh_token)
-
-        reason, should_delete = workspace_decision(pr_state, target_pr, pr_number)
-
-        if reason == "skip":
-            continue
-
-        if should_delete:
-            try:
-                fabric_transport.request("DELETE", f"/workspaces/{ws['id']}")
-                outcome = "deleted"
-            except Exception as exc:
-                print(f"  Failed to delete {name}: {exc}", file=sys.stderr)
-                outcome = "failed"
-                has_failure = True
-        else:
-            outcome = "kept"
-
-        print(f"  {name} (PR #{pr_number}): {reason} -> {outcome}", flush=True)
-        audit_log.append(
-            {"workspace": name, "pr": pr_number, "reason": reason, "outcome": outcome}
-        )
-
-    with open("workspace-cleanup-audit.json", "w") as f:
-        json.dump(audit_log, f, indent=2)
-    print(f"Audit log written ({len(audit_log)} entries).", flush=True)
-
-    if has_failure:
+    # The decision and the delete loop are shared with the Warehouse lane (VD-5243).
+    if not fabric_workspace_cleanup.cleanup(
+        args.repo, getattr(args, "pr_number", None), os.environ.get("GH_TOKEN", "")
+    ):
         sys.exit(1)
 
 

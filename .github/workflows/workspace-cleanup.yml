@@ -1,7 +1,7 @@
 # Fabric Workspace Cleanup
 #
-# Triggered daily or manually. Deletes vibedata_ephemeral_* Fabric workspaces
-# whose PR has been closed or no longer exists in THIS domain repo.
+# Triggered daily or manually. Deletes THIS repo's vibedata_ephemeral_<repo>_<pr> Fabric
+# workspaces whose PR has been closed or no longer exists (fabric_workspace_cleanup.py).
 
 name: Fabric Workspace Cleanup
 

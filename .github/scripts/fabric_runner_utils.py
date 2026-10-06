@@ -61,6 +61,59 @@ def select_clone_names(deployment_manifest_path: str) -> list[str]:
     ]
 
 
+class DeferManifestMissingWorkspaceError(RuntimeError):
+    """Raised when a project-owned model in the staged defer manifest lacks
+    workspace_name (AC-95) — a deferred reference to it would otherwise
+    silently resolve against the consuming run's own ephemeral workspace
+    instead of failing visibly."""
+
+
+def find_deferred_nodes_missing_workspace(manifest: dict) -> list[str]:
+    """Pure: leaf names of this project's own non-ephemeral models in `manifest`
+    whose config lacks a workspace_name (AC-95).
+
+    Scoped to `metadata.project_name` so dependency-package models (e.g. an
+    installed dbt package) are never flagged — only this project's own models
+    are meant to carry the injected workspace_name (domain-deploy AC-13).
+    Ephemeral models are excluded: they compile inline as CTEs and never
+    resolve to a real relation, so they never need one.
+    """
+    project_name = (manifest.get("metadata") or {}).get("project_name", "")
+    prefix = f"model.{project_name}."
+    missing = []
+    for node_id, node in (manifest.get("nodes") or {}).items():
+        if not node_id.startswith(prefix):
+            continue
+        config = node.get("config") or {}
+        if config.get("materialized") == "ephemeral":
+            continue
+        if not config.get("workspace_name"):
+            missing.append(node.get("name") or node_id.split(".")[-1])
+    return missing
+
+
+def validate_defer_manifest_workspaces() -> None:
+    """Raise DeferManifestMissingWorkspaceError if the manifest setup_defer just
+    staged is missing workspace_name on any project-owned model (AC-95).
+
+    No-op if the defer manifest doesn't exist (greenfield — setup_defer already
+    returned [] and no --defer args are in play) or can't be parsed.
+    """
+    defer_manifest_path = pathlib.Path(runner_io.target_path("target/prod-state-defer/manifest.json"))
+    if not defer_manifest_path.exists():
+        return
+    try:
+        with open(defer_manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return
+    missing = find_deferred_nodes_missing_workspace(manifest)
+    if missing:
+        raise DeferManifestMissingWorkspaceError(
+            "defer manifest is missing workspace_name for: " + ", ".join(sorted(missing))
+        )
+
+
 def setup_defer(prod_state_dir: str) -> list[str]:
     """Copy manifest_prod.json to target/prod-state-defer/manifest.json.
 
