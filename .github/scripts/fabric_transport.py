@@ -1,10 +1,13 @@
-"""Unified Fabric/Azure transport: token acquisition, retry, LRO polling, DFS writes.
+"""Unified Fabric/Azure transport: token acquisition, retry, LRO polling, OneLake DFS reads and writes.
 
 Public surface:
   get_token(audience) -> str
   request(method, path, body=None, audience='fabric', retries=3) -> dict
-  request_long_running(method, path, body, audience='fabric', timeout_s=120, poll_interval_s=5) -> dict
+  request_long_running(method, path, body, audience='fabric', timeout_s=120, poll_interval_s=5, retries=3) -> dict
   dfs_request(method, url, audience='storage', data=None, params=None) -> None
+  blob_request(method, workspace, path, ...) -> (bytes, headers)
+  dfs_delete_recursive(workspace, path, page_limit=1000) -> bool
+  dfs_list(workspace, directory, page_limit=100) -> list[dict] | None   (raises OneLakeListError)
 
 Audiences: fabric, powerbi, storage.
 """
@@ -64,6 +67,97 @@ def blob_request(method, workspace, path, *, data=None, headers=None, params=Non
         raise RuntimeError(f"ingestion Blob operation failed (HTTP {status})") from None
     except Exception as exc:
         raise RuntimeError(f"ingestion Blob operation failed ({type(exc).__name__})") from None
+
+
+def dfs_delete_recursive(workspace, path, *, page_limit=1000):
+    """Delete a OneLake directory tree; False when it was already absent.
+
+    ADLS answers a large recursive delete in pages, handing back `x-ms-continuation`
+    until the tree is gone, so a repeated or unending token must not read as success.
+    """
+    base = os.environ.get("ONELAKE_DFS_BASE_URL", "https://onelake.dfs.fabric.microsoft.com")
+    url = (base.rstrip("/") + "/" + urllib.parse.quote(workspace, safe="")
+           + "/" + urllib.parse.quote(path, safe="/"))
+    token, seen = None, set()
+    for _ in range(page_limit):
+        params = {"recursive": "true", **({"continuation": token} if token else {})}
+        try:
+            req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params), method="DELETE")
+            req.add_header("Authorization", f"Bearer {get_token('storage')}")
+            req.add_header("x-ms-version", "2021-12-02")
+            with urllib.request.urlopen(req, timeout=60) as response:
+                token = response.headers.get("x-ms-continuation")
+        except CancelledError:
+            raise
+        except urllib.error.HTTPError as exc:
+            status, code = exc.code, exc.headers.get("x-ms-error-code", "")
+            exc.close()
+            # Absent only on the first page: a 404 mid-way means the tree changed under us.
+            if status == 404 and code in ("PathNotFound", "BlobNotFound", "ResourceNotFound") and token is None:
+                return False
+            raise RuntimeError(f"OneLake folder delete failed (HTTP {status})") from None
+        except Exception as exc:
+            raise RuntimeError(f"OneLake folder delete failed ({type(exc).__name__})") from None
+        if not token:
+            return True
+        if token in seen:
+            raise RuntimeError("OneLake folder delete repeated its continuation token")
+        seen.add(token)
+    raise RuntimeError("OneLake folder delete exceeded its page limit")
+
+
+class OneLakeListError(RuntimeError):
+    """A failed OneLake listing; `status` is the HTTP status when the service answered one."""
+
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+
+def dfs_list(workspace, directory, *, page_limit=100):
+    """List one level of a OneLake directory; None when the directory does not exist.
+
+    Absence and emptiness are different answers on purpose: a Warehouse whose schemas hold no
+    tables has no `Tables` directory at all, which is a new Domain rather than a failure, while
+    an existing directory with nothing in it is the empty list. ADLS pages a wide listing with
+    `x-ms-continuation`, so a repeated or unending token must fail rather than loop.
+    """
+    base = os.environ.get("ONELAKE_DFS_BASE_URL", "https://onelake.dfs.fabric.microsoft.com")
+    url = base.rstrip("/") + "/" + urllib.parse.quote(workspace, safe="")
+    entries, token, seen = [], None, set()
+    for _ in range(page_limit):
+        params = {"resource": "filesystem", "recursive": "false", "directory": directory}
+        if token:
+            params["continuation"] = token
+        try:
+            req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params), method="GET")
+            req.add_header("Authorization", f"Bearer {get_token('storage')}")
+            req.add_header("x-ms-version", "2021-12-02")
+            with urllib.request.urlopen(req, timeout=60) as response:
+                token = response.headers.get("x-ms-continuation")
+                entries.extend(json.loads(response.read() or b"{}").get("paths", []))
+        except CancelledError:
+            raise
+        except urllib.error.HTTPError as exc:
+            status, code = exc.code, exc.headers.get("x-ms-error-code", "")
+            exc.close()
+            # Absent only on the first page: a 404 mid-way means the tree changed under us.
+            if status == 404 and token is None:
+                return None
+            raise OneLakeListError(f"OneLake listing of {directory!r} failed (HTTP {status} {code})".rstrip(), status) from None
+        except Exception as exc:
+            # A refused connection, a timeout or an unreadable body is a failed read, never an
+            # empty directory — the same contract the delete above keeps.
+            # The cause is kept: an expired az login (get_token) must say so, and none of these
+            # non-HTTP errors carries a provider response body.
+            raise OneLakeListError(f"OneLake listing of {directory!r} failed ({type(exc).__name__}: {exc})") from None
+        if not token:
+            return entries
+        if token in seen:
+            raise OneLakeListError(f"OneLake listing of {directory!r} repeated its continuation token")
+        seen.add(token)
+    raise OneLakeListError(f"OneLake listing of {directory!r} exceeded its page limit")
+
 
 def _fabric_api_base() -> str:
     """Read FABRIC_API_BASE_URL per call (not at import time) so a fake-world
@@ -183,31 +277,43 @@ def request_multipart(method: str, path: str, file_content: bytes, filename: str
 
 def request_long_running(
     method: str, path: str, body: dict,
-    audience: str = "fabric", timeout_s: int = 120, poll_interval_s: int = 5,
+    audience: str = "fabric", timeout_s: int = 120, poll_interval_s: int = 5, retries: int = 3,
 ) -> dict:
     """POST/PATCH/PUT to Fabric; handle 202 + Location/operationId polling.
+
+    The initial request is retried on 429/430/503 (never on a 500 — see below).
 
     Returns the initial response body dict (contains item id on 201; empty on 202).
     Raises RuntimeError on LRO failure or timeout.
     """
     base = _base_url(audience)
     url = f"{base}{path}"
-    token = get_token(audience)
     data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {token}")
-    req.add_header("Content-Type", "application/json")
 
-    try:
-        with urllib.request.urlopen(req) as resp:
-            status = resp.status
-            location = resp.getheader("Location")
-            raw = resp.read()
-            parsed = (json.loads(raw) or {}) if raw else {}
-    except urllib.error.HTTPError as e:
-        body_text = e.read().decode(errors="replace")
-        print(f"HTTP {e.code} {method} {url}: {body_text}", file=sys.stderr)
-        raise
+    # Retry only the answers that mean the request was not processed (throttled, unavailable).
+    # Unlike request(), never a 500: a create can have happened behind one, and this function
+    # creates items, so a retry there could meet — or duplicate — what the first attempt made.
+    for attempt in range(retries):
+        token = get_token(audience)
+        req = urllib.request.Request(url, data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                status = resp.status
+                location = resp.getheader("Location")
+                raw = resp.read()
+                parsed = (json.loads(raw) or {}) if raw else {}
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 430, 503) and attempt < retries - 1:
+                delay = _retry_delay(e.code, attempt, e.headers)
+                print(f"Retrying after {delay}s (attempt {attempt + 1}/{retries}): {e.code} {e.msg}", flush=True)
+                time.sleep(delay)
+                continue
+            body_text = e.read().decode(errors="replace")
+            print(f"HTTP {e.code} {method} {url}: {body_text}", file=sys.stderr)
+            raise
 
     if not location and "operationId" in parsed:
         location = f"{_fabric_api_base()}/operations/{parsed['operationId']}"
@@ -254,7 +360,7 @@ def _poll_operation(
     raise RuntimeError(
         f"Fabric operation timed out after {timeout_s}s "
         f"(last status: {last_status!r}). "
-        "The notebook may not be available in the workspace."
+        "The item it creates or runs may not be available in the workspace yet."
     )
 
 

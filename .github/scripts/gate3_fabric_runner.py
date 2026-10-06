@@ -9,7 +9,13 @@ import sys
 
 import emit_status
 import runner_io
-from fabric_runner_utils import select_names as _select_names, setup_defer as _setup_defer, write_gate_result as _write_gate_result
+from fabric_runner_utils import (
+    DeferManifestMissingWorkspaceError,
+    select_names as _select_names,
+    setup_defer as _setup_defer,
+    validate_defer_manifest_workspaces as _validate_defer_manifest_workspaces,
+    write_gate_result as _write_gate_result,
+)
 from parse_run_results import summarize
 
 CONTEXT = "ci/unit-tests"
@@ -45,6 +51,16 @@ def cmd_run_gate(args) -> int:
     names = _select_names(args.deployment_manifest)
     profiles_dir = args.profiles_dir
     defer_args = _setup_defer(args.prod_state_dir)
+
+    # AC-95: a deferred reference must fail visibly rather than silently resolve
+    # against this run's own ephemeral workspace — check before any dbt command runs.
+    if defer_args:
+        try:
+            _validate_defer_manifest_workspaces()
+        except DeferManifestMissingWorkspaceError as e:
+            print(f"ERROR: {e}", flush=True, file=sys.stderr)
+            _post(head_sha, "failure", f"Gate 3: {e}")
+            return 1
 
     subprocess.run(
         ["dbt", "deps", "--project-dir", runner_io.project_dir(),
