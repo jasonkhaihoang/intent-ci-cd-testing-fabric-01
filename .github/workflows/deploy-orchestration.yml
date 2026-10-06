@@ -14,11 +14,6 @@ on:
       - 'transformation/**'
       - 'ingestion/**'
   workflow_dispatch:
-    inputs:
-      force:
-        description: 'Apply even when the packaged contentHash is unchanged'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -44,6 +39,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The deploy reads .workflow/ci-config.yml to name the Lakehouse the notebooks
+      # attach (VD-5847), and parses transformation/ for the production manifest an
+      # Intent run defers to. The adapter versions come from the managed constraints, the same
+      # file the plugin's job notebook template embeds.
+      - run: pip install -c .github/managed-constraints.txt --quiet pyyaml dbt-core dbt-fabricspark
+
       - name: Azure login (OIDC)
         if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
@@ -53,13 +54,8 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Deploy committed orchestration items
-        env:
-          # The one per-environment binding that is never committed.
-          VD_DBTJOB_CONNECTION_ID: ${{ vars.VD_DBTJOB_CONNECTION_ID }}
-          VD_DBT_PROFILE_JSON: ${{ vars.VD_DBT_PROFILE_JSON }}
         run: |
           python3 .github/scripts/deploy_orchestration.py \
             --repo-root . \
             --workspace-id "${{ vars.VD_PROD_WORKSPACE_ID }}" \
-            --enable-schedules \
-            ${{ inputs.force && '--force' || '' }}
+            --enable-schedules

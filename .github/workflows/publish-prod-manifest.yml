@@ -8,6 +8,21 @@ on:
       - '.github/profiles/profiles.yml'
   workflow_dispatch:
 
+# AC-17: repo-wide (no ref component) because the resource this protects, dbt-docs-latest, is
+# repo-wide too — a workflow_dispatch off any ref must still serialize against a main push.
+# cancel-in-progress: false means an overlapping run queues rather than being cancelled
+# mid-clobber. `queue: max` (GitHub's larger-queue-depth option, shipped 2026-05-07) is real
+# GitHub syntax but is NOT used here: this repo's fake-world CI harness validates every
+# workflow through a pinned `act` build (v0.2.86) whose bundled schema validator rejects
+# `queue` as an unknown property under `concurrency` and hard-fails the entire workflow set
+# for every deployed bundle -- confirmed live (act's own error: "Unknown Property queue").
+# Accepted residual risk: without queue: max, GitHub's default keeps only the single newest
+# pending run, so a third or later overlapping run could still be dropped rather than queued.
+# Same treatment as this spec's pre-existing accepted concurrency gap (AC-DPL-38).
+concurrency:
+  group: publish-prod-manifest
+  cancel-in-progress: false
+
 jobs:
   publish:
     runs-on: ubuntu-latest
@@ -22,12 +37,20 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-python@v6
+      # Matches ci.yml's established convention: actions/setup-python's toolcache is a
+      # Docker volume act shares across separate invocations on the same host, so packages
+      # pip-installed by an earlier fake-world test invocation persist into this one --
+      # confirmed live (a leftover dbt-fabricspark from a prior test made
+      # publish_manifest_release.py's adapter-detection see two candidates instead of one).
+      # Skipping this under FAKE_WORLD and using the image's own system python3 avoids that
+      # shared-volume carryover; real (non-fake-world) runs are unaffected.
+      - if: vars.FAKE_WORLD == ''
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
       - name: Install dbt
-        run: pip install "dbt-core>=1.8" "dbt-fabricspark>=1.8" pyyaml --quiet
+        run: pip install -c .github/managed-constraints.txt dbt-core dbt-fabricspark pyyaml --quiet
 
       - name: Add fake-world dbt shim to PATH
         if: vars.FAKE_WORLD != ''
@@ -45,11 +68,17 @@ jobs:
           workspace_name = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME", "")
           lakehouse_id   = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_ID", "")
           lakehouse      = config.get("VD_DOMAIN_FABRIC_LAKEHOUSE_NAME", "")
-          schema         = "dummy"  # AC-64: VD_DOMAIN_SCHEMA dropped — confirmed dead,
-                                     # matches the ephemeral profile's own placeholder convention
+          # Parsing under this target writes each node's schema into
+          # manifest_prod.json, and a deferred run resolves an unselected
+          # reference to it. A placeholder here publishes a manifest naming a
+          # schema no deploy writes to, so the value is required rather than
+          # defaulted. `parse_ci_config` still does not require the key (AC-64);
+          # this step does, the same way it already requires the four
+          # coordinates below.
+          schema         = config.get("VD_DOMAIN_SCHEMA", "")
 
-          if not all([workspace_id, workspace_name, lakehouse_id, lakehouse]):
-              print("ci-config.yml missing VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME / VD_DOMAIN_FABRIC_LAKEHOUSE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_NAME — cannot generate prod-manifest profile.", flush=True)
+          if not all([workspace_id, workspace_name, lakehouse_id, lakehouse, schema]):
+              print("ci-config.yml missing VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_WORKSPACE_NAME / VD_DOMAIN_FABRIC_LAKEHOUSE_ID / VD_DOMAIN_FABRIC_LAKEHOUSE_NAME / VD_DOMAIN_SCHEMA — cannot generate prod-manifest profile.", flush=True)
               sys.exit(1)
 
           with open(".github/profiles/profiles.yml") as f:
@@ -135,6 +164,23 @@ jobs:
           cp /tmp/prod-manifests/manifest.json "$PROJ/target/manifest.json"
           cp /tmp/prod-manifests/manifest_prod.json "$PROJ/target/manifest_prod.json"
 
+      # AC-14..AC-18: cut the immutable per-build release (dbt-manifest-<sha>) before the
+      # dbt-docs-latest step below, so a failure here stops the job before the mutable release
+      # advances. Also writes manifest-source.json into $PROJ/target so the dbt-docs-latest
+      # publish step (next) picks it up as an asset too.
+      # `github.event.after` (falling back to `github.sha` for workflow_dispatch, which has
+      # no `.after`) rather than `github.sha` alone: confirmed live that this repo's
+      # fake-world CI harness's push-event fixture leaves `github.sha` unresolved when the
+      # deployed scratch copy isn't a git repo, silently rendering it empty and shifting
+      # every argument after it. `github.event.after` reads directly from the event JSON
+      # act was given, with no git-repo dependency.
+      - name: Publish immutable per-build manifest release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 .github/scripts/publish_manifest_release.py "$PROJ/target" \
+            ${{ github.event.after || github.sha }} manifest.json manifest_prod.json
+
       # The manifests ride the docs release rather than an Actions artifact (VD-4418):
       # release assets are repository contents, which the brokered agent GitHub token
       # can read, while `gh run download` needs Actions read and is unreachable from an
@@ -144,4 +190,4 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python3 .github/scripts/publish_dbt_docs_release.py "$PROJ/target" \
-            static_index.html manifest.json manifest_prod.json
+            static_index.html manifest.json manifest_prod.json manifest-source.json
