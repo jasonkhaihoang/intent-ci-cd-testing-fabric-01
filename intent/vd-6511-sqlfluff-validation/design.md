@@ -34,7 +34,9 @@
 
 **Grain:** One row per sale transaction.
 
-**Columns:** `sale_id`, `customer_id`, `product_id`, `sale_date`, `quantity`, `unit_price`, `total_amount`, `line_amount` (quantity × unit_price), `region`, `sales_rep`
+**Columns:**
+- `sale_id` — Unique sale transaction identifier
+- `line_amount` — Quantity × unit price
 
 **Tests:**
 - `sale_id`: not_null, unique
@@ -47,7 +49,8 @@
 
 **Grain:** One row per sale transaction — the sales downstream models may rely on.
 
-**Columns:** `sale_id`, `customer_id`, `product_id`, `sale_date`, `quantity`, `unit_price`, `total_amount`, `line_amount`, `region`, `sales_rep`
+**Columns:**
+- `sale_id` — Unique sale transaction identifier
 
 **Tests:**
 - `sale_id`: not_null, unique
@@ -60,7 +63,9 @@
 
 **Grain:** One row per sale transaction, with its sales region.
 
-**Columns:** `sale_id`, `sale_date`, `region`, `total_amount`, `line_amount`
+**Columns:**
+- `sale_id` — Unique sale transaction identifier
+- `region` — Sales region (North, South, East, West)
 
 **Tests:**
 - `sale_id`: not_null, unique
@@ -80,6 +85,8 @@
 
 **Tests:**
 - `region`: not_null, unique
+
+Columns listed for the intermediate and marts models are the ones each model's YAML documents, which is what the manifest (and `ci/design-drift`) sees.
 
 ## Change Impact
 
