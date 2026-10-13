@@ -96,6 +96,19 @@ def _is_blank(value) -> bool:
     return value is None or (isinstance(value, str) and value.strip() == "")
 
 
+def require_indirection_key(config: dict, key: str) -> dict:
+    """Return the GitHub Actions name a `*_VAR` indirection key holds, or an error naming the key.
+
+    Pure and deliberately not part of `parse_ci_config`'s validation: that stays permissive about
+    `*_VAR` keys (AC-11). Callers with no safe default name (the MotherDuck cleanup, AC-113) use
+    this to fail closed instead of falling back to a literal secret name.
+    """
+    value = config.get(key)
+    if not isinstance(value, str) or _is_blank(value):
+        return {"ok": False, "value": None, "error": f"ci-config.yml must set {key} to a GitHub Actions secret or variable name"}
+    return {"ok": True, "value": value.strip(), "error": None}
+
+
 # Committed coordinate key -> legacy lowercase key every existing downstream
 # consumer (preflight.py's GITHUB_OUTPUT writer, ci.yml's `outputs.*` refs,
 # fabric_api.py) already expects. VD_DOMAIN_SCHEMA has no entry here —

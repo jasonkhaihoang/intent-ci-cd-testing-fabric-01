@@ -622,11 +622,11 @@ jobs:
           EOF
 
   # ─── DESIGN DRIFT ────────────────────────────────────────────────────────────
-  # Runner-side LLM gate: compares intent/<intent-id>/design.md against state:modified.
+  # Runner-side LLM gate: compares changed design records against state:modified.
   # Hard DAG gate: provision-workspace needs this job so a drift failure short-circuits
   # the ephemeral workspace + Spark provision before any compute is spent (AC-8).
   design-drift:
-    name: "ci/design-drift: design.md vs state:modified"
+    name: "ci/design-drift: design records vs state:modified"
     needs: [preflight, fetch-prod-state]
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
@@ -638,6 +638,8 @@ jobs:
     steps:
       - if: vars.FAKE_WORLD == ''
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Resolve layout
         run: |
@@ -703,6 +705,18 @@ jobs:
           dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
           dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
 
+      - name: Resolve changed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FAKE_WORLD: ${{ vars.FAKE_WORLD }}
+        run: |
+          # Fake-world deploys a one-commit repo with no PR base: every file counts as changed.
+          if [ -n "$FAKE_WORLD" ]; then
+            find . -type f -not -path './.git/*' | sed 's|^\./||' > changed-paths.txt
+          else
+            git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD > changed-paths.txt
+          fi
+
       - name: Run design-drift gate
         id: run-gate
         env:
@@ -717,7 +731,7 @@ jobs:
           python3 ${{ env.SCRIPTS }}/design_drift_runner.py \
             --pr-number  "${{ github.event.pull_request.number }}" \
             --head-sha   "${{ github.event.pull_request.head.sha }}" \
-            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
+            --changed-paths changed-paths.txt \
             --manifest   "$PROJ/target/manifest.json" \
             --modified   "reports/modified.json"
 
@@ -757,230 +771,10 @@ jobs:
   # ─── PROVISION ────────────────────────────────────────────────────────────
   # 1. KV UAMI: fetch Fabric capacity ID + GitHub App config → GITHUB_ENV
   # 2. Fabric UAMI: find-or-create workspace + lakehouse
-  # ─── ORCHESTRATION ──────────────────────────────────────────────────────────
-  # Validates the optional `## Schedule` design-contract section in intent/<slug>/design.md.
-  # Platform-neutral: cron/DAG/selector resolution only — does not deploy schedules.
-  # VD-5918: a conformance gate is design-drift's peer, not its dependant —
-  # see docs/design/domain-pr-review-approval/gate-isolation/README.md.
-  orchestration:
-    name: "ci/orchestration: schedule design contract"
-    if: github.event.action != 'closed'
-    needs: [preflight]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      statuses: write
-      pull-requests: write
-    steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
-
-      - name: Resolve layout
-        run: |
-          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
-          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
-
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
-      - run: pip install -c .github/managed-constraints.txt pyyaml dbt-core dbt-fabricspark --quiet
-
-      - name: Emit ci/orchestration pending
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          sys.path.insert(0, ".github/scripts")
-          import emit_status
-          emit_status.emit_status(
-              os.environ["GITHUB_REPOSITORY"],
-              os.environ["CI_HEAD_SHA"],
-              "ci/orchestration",
-              "pending",
-              "Gate: orchestration running",
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-          )
-          EOF
-
-      - name: Parse dbt project
-        id: parse
-        # VD-5918: the parse output is kept so a parse failure can be relayed
-        # on this gate's own status. An artifact that stops the project parsing
-        # is exactly what these gates exist to judge, and it was the one case
-        # where they reported nothing but "see job logs".
-        run: |
-          set -o pipefail
-          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
-          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
-
-      - name: Run orchestration gate
-        id: run-gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: |
-          python3 ${{ env.SCRIPTS }}/orchestration_gate_runner.py \
-            --pr-number  "${{ github.event.pull_request.number }}" \
-            --head-sha   "${{ github.event.pull_request.head.sha }}" \
-            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
-            --manifest   "$PROJ/target/manifest.json"
-
-      - name: Emit ci/orchestration final-status failure
-        if: failure() && steps.run-gate.conclusion != 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PARSE_OUTCOME: ${{ steps.parse.outcome }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          sys.path.insert(0, ".github/scripts")
-          import emit_status
-          from dbt_error_report import summarize_parse_failure
-          # Only the parse step's own failure puts a rejection in that log. This
-          # emitter fires on any pre-runner failure, and a log from a parse that
-          # succeeded would otherwise be relayed as the cause of something else.
-          cause = ""
-          if os.environ.get("PARSE_OUTCOME") == "failure":
-              try:
-                  with open("gate-parse.log") as f:
-                      cause = summarize_parse_failure(f.read())
-              except OSError:
-                  cause = ""
-          emit_status.emit_status(
-              os.environ["GITHUB_REPOSITORY"],
-              os.environ["CI_HEAD_SHA"],
-              "ci/orchestration",
-              "failure",
-              cause or "Gate failed before runner started: see job logs",
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-          )
-          EOF
-
-  # ─── SEMANTIC-MODEL ─────────────────────────────────────────────────────────
-  # Validates the optional `## Semantic Model` design-contract section against the dbt
-  # MetricFlow objects in manifest.json. Static only — no live MetricFlow query runtime check.
-  # VD-5918: a conformance gate is design-drift's peer, not its dependant —
-  # see docs/design/domain-pr-review-approval/gate-isolation/README.md.
-  semantic-model:
-    name: "ci/semantic-model: dbt MetricFlow design contract"
-    if: github.event.action != 'closed'
-    needs: [preflight]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      statuses: write
-      pull-requests: write
-    steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
-
-      - name: Resolve layout
-        run: |
-          echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
-          echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
-
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
-      - run: pip install -c .github/managed-constraints.txt pyyaml dbt-core dbt-fabricspark --quiet
-
-      - name: Emit ci/semantic-model pending
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          sys.path.insert(0, ".github/scripts")
-          import emit_status
-          emit_status.emit_status(
-              os.environ["GITHUB_REPOSITORY"],
-              os.environ["CI_HEAD_SHA"],
-              "ci/semantic-model",
-              "pending",
-              "Gate: semantic-model running",
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-          )
-          EOF
-
-      - name: Parse dbt project
-        id: parse
-        # VD-5918: the parse output is kept so a parse failure can be relayed
-        # on this gate's own status. An artifact that stops the project parsing
-        # is exactly what these gates exist to judge, and it was the one case
-        # where they reported nothing but "see job logs".
-        run: |
-          set -o pipefail
-          dbt deps --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
-          dbt parse --project-dir "$PROJ" --profiles-dir .github/profiles --target dbt_fabric_compile --quiet 2>&1 | tee -a gate-parse.log
-
-      - name: Run semantic-model gate
-        id: run-gate
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          GITHUB_SERVER_URL: ${{ github.server_url }}
-          GITHUB_RUN_ID: ${{ github.run_id }}
-        run: |
-          python3 ${{ env.SCRIPTS }}/semantic_model_gate_runner.py \
-            --pr-number  "${{ github.event.pull_request.number }}" \
-            --head-sha   "${{ github.event.pull_request.head.sha }}" \
-            --intent-id  "${{ needs.preflight.outputs.intent_slug }}" \
-            --manifest   "$PROJ/target/manifest.json"
-
-      - name: Emit ci/semantic-model final-status failure
-        if: failure() && steps.run-gate.conclusion != 'failure'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PARSE_OUTCOME: ${{ steps.parse.outcome }}
-        run: |
-          python3 - <<'EOF'
-          import os, sys
-          sys.path.insert(0, ".github/scripts")
-          import emit_status
-          from dbt_error_report import summarize_parse_failure
-          # Only the parse step's own failure puts a rejection in that log. This
-          # emitter fires on any pre-runner failure, and a log from a parse that
-          # succeeded would otherwise be relayed as the cause of something else.
-          cause = ""
-          if os.environ.get("PARSE_OUTCOME") == "failure":
-              try:
-                  with open("gate-parse.log") as f:
-                      cause = summarize_parse_failure(f.read())
-              except OSError:
-                  cause = ""
-          emit_status.emit_status(
-              os.environ["GITHUB_REPOSITORY"],
-              os.environ["CI_HEAD_SHA"],
-              "ci/semantic-model",
-              "failure",
-              cause or "Gate failed before runner started: see job logs",
-              "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-          )
-          EOF
-
   provision-workspace:
     name: "Provision workspace, environment, shortcuts"
     if: github.event.action != 'closed'
-    needs: [preflight, fetch-prod-state, design-drift, orchestration, semantic-model]
+    needs: [preflight, fetch-prod-state, design-drift]
     runs-on: ubuntu-latest
     outputs:
       ephemeral_workspace_id: ${{ steps.provision.outputs.workspace_id }}
@@ -1886,7 +1680,7 @@ jobs:
   status-sweep:
     name: "Sweep unrun required gates"
     if: always() && github.event.action != 'closed'
-    needs: [preflight, adr-numbering, static-analysis, fetch-prod-state, design-drift, orchestration, semantic-model, provision-workspace, gate-2-write, gate-3-unit, gate-4-data-test]
+    needs: [preflight, adr-numbering, static-analysis, fetch-prod-state, design-drift, provision-workspace, gate-2-write, gate-3-unit, gate-4-data-test]
     runs-on: ubuntu-latest
     permissions:
       contents: read

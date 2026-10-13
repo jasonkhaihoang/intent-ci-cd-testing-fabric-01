@@ -8,7 +8,7 @@ Warehouse bundle's `workspace-cleanup.yml` invokes this module directly.
 CLI:
     fabric_workspace_cleanup.py --repo OWNER/REPO [--pr-number N]
 
-Authentication: the workflow's azure/login session (operator-managed CD identity, AC-31).
+Authentication: the workflow's azure/login session (the CI identity, AC-31, AC-116).
 Writes `workspace-cleanup-audit.json`; exits 1 when any delete failed.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ try:
 except ImportError:  # invoked as `python3 path/to/fabric_workspace_cleanup.py`
     import fabric_transport
 
-GITHUB_API = "https://api.github.com"
+GITHUB_API = os.environ.get("GITHUB_API_BASE_URL", "https://api.github.com")
 EPHEMERAL_PREFIX = "vibedata_ephemeral_"
 AUDIT_PATH = "workspace-cleanup-audit.json"
 
