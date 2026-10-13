@@ -8,8 +8,9 @@ ephemeral apply — same artifacts, same REST surface, different coordinates.
 
 Contract:
   * a pipeline invokes two kinds of notebook: the dlt runner, pinned to the plugin's
-    template bytes, and a dbt job notebook, recognised by its marker, which carries
-    its own commands and takes only `DBT_OUTPUT_DIR`;
+    template bytes outside its embedded managed constraints, and a dbt job notebook,
+    recognised by its marker, which carries its own commands and takes only
+    `DBT_OUTPUT_DIR`;
   * the code each reads replaces its folder in the Domain Lakehouse before any item
     is applied — `Files/<slug>/ingestion` for the runner, `Files/<slug>/transformation`
     for a dbt job, with this commit's `dbt parse --target prod` manifest at
@@ -55,15 +56,26 @@ except ImportError:  # invoked as `python3 path/to/deploy_orchestration.py`
     import ci_config
     import managed_requirements_gate
 
-# The plugin's Lakehouse runner template at vd-data-engineering SUPPORTED_RUNNER_REVISION,
-# which its materializer copies verbatim. A reader update needs a compatibility review and the
-# fixture/digest parity update in the same change. The Warehouse runner is not
-# accepted: this bundle deploys `fabric_lakehouse` Domains only.
-SUPPORTED_INGESTION_RUNNER = "807d97261940099aa3c8c1398cb50b7ce7ffe27c130dd71f680157b1d46d6c98"
-SUPPORTED_RUNNER_REVISION = "f4d2c67f"
+# The plugin's Lakehouse runner as materialize-runner.py writes it, by runner_digest, mapped to
+# the vd-data-engineering plugin version that introduced it. Older entries stay so a Domain committed
+# against them keeps deploying; the newest is last and is the one a refusal names. A reader update
+# needs a compatibility review and the fixture/digest parity update in the same change. The
+# Warehouse runner is not accepted: this bundle deploys `fabric_lakehouse` Domains only.
+SUPPORTED_INGESTION_RUNNERS = {
+    "807d97261940099aa3c8c1398cb50b7ce7ffe27c130dd71f680157b1d46d6c98": "0.107.0",
+    "39ebb4db7d7997b376306b6db67612188b43ec6598cb5802cf5881277575ed61": "0.115.0",
+    # The runner title spelled "Vibedata" (VD-6640).
+    "32861071140ce75b4aa9924230d70c0643f793aad75d5d903be0eb4df4512855": "0.118.5",
+}
+SUPPORTED_RUNNER_REVISION = list(SUPPORTED_INGESTION_RUNNERS.values())[-1]
+# Since vd-data-engineering 0.115.0 (VD-6444) the materializer embeds the managed constraints
+# in the runner as this literal, so its bytes change with every constraints bump. The digest
+# blanks the literal's body: a constraints bump is not a different runner (VD-6642).
+_RUNNER_CONSTRAINTS_RE = re.compile(rb'^(MANAGED_CONSTRAINTS = """).*?(""")$', re.MULTILINE | re.DOTALL)
 # A dbt job notebook is the plugin's template with its own commands written in, so it
-# is recognised by the marker its first cell carries rather than by its bytes.
-DBT_JOB_MARKER = b"# VibeData dbt job"
+# is recognised by the marker its first cell carries rather than by its bytes — spelled
+# "Vibedata" since vd-data-engineering 0.118.5, "VibeData" in a notebook committed before.
+DBT_JOB_MARKERS = (b"# Vibedata dbt job", b"# VibeData dbt job")
 DBT_JOB_PARAMETERS = {"DBT_OUTPUT_DIR": {"value": {"value": "@pipeline().RunId", "type": "Expression"},
                                          "type": "string"}}
 PROD_MANIFEST = "transformation/prod-target/manifest.json"
@@ -73,6 +85,11 @@ RETIRED_DBT_JOB = ("a Fabric dbt job (DataBuildToolJob), which Domains no longer
 # The first `# META { … }` block of a `notebook-content.py` is the notebook's own
 # metadata; later blocks belong to individual cells.
 _META_BLOCK_RE = re.compile(r"(?m)^# META \{\n(?:^# META .*\n)*?^# META \}\n")
+
+
+def runner_digest(source: bytes) -> str:
+    """The runner's sha256 with its embedded managed constraints blanked."""
+    return hashlib.sha256(_RUNNER_CONSTRAINTS_RE.sub(rb"\1\2", source, count=1)).hexdigest()
 
 
 def log(msg):
@@ -481,7 +498,8 @@ def main():
         if not sources[notebook_dir]:
             fail(f"{notebook_dir.name}/notebook-content.py is empty")
     dbt_notebooks = {logical_by_dir[d] for d, source in sources.items()
-                     if logical_by_dir[d] in invoked_notebooks and DBT_JOB_MARKER in source}
+                     if logical_by_dir[d] in invoked_notebooks
+                     and any(marker in source for marker in DBT_JOB_MARKERS)}
     check_dbt_job_activities(pipeline_contents.values(), dbt_notebooks)
 
     has_runner = bool(invoked_notebooks - dbt_notebooks)
@@ -517,7 +535,7 @@ def main():
     for notebook_dir, source in sources.items():
         logical = logical_by_dir[notebook_dir]
         if logical in invoked_notebooks:
-            if logical not in dbt_notebooks and hashlib.sha256(source).hexdigest() != SUPPORTED_INGESTION_RUNNER:
+            if logical not in dbt_notebooks and runner_digest(source) not in SUPPORTED_INGESTION_RUNNERS:
                 fail(f"{notebook_dir.name} is neither the supported dlt runner nor a dbt job notebook; "
                      f"refresh the runner with vd-data-engineering {SUPPORTED_RUNNER_REVISION}'s "
                      "materialize-runner.py <name> --engine dlt --platform lakehouse --out orchestration --force")

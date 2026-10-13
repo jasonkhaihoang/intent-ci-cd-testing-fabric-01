@@ -13,7 +13,7 @@
 # Engines and adapters.
 dbt-core==1.12.5
 dbt-fabric==1.11.1
-dbt-fabricspark==1.13.6
+dbt-fabricspark==1.13.8
 dbt-duckdb==1.11.0
 dbt-redshift==1.11.1
 dbt-bigquery==1.12.1
