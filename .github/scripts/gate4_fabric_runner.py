@@ -14,9 +14,9 @@ except ImportError:
 
 import emit_status
 import runner_io
+from gate4_scope import Run, decide_gate4_scope, scope_outcome
 from fabric_runner_utils import (
     DeferManifestMissingWorkspaceError,
-    select_names as _select_names,
     setup_defer as _setup_defer,
     validate_defer_manifest_workspaces as _validate_defer_manifest_workspaces,
     write_gate_result as _write_gate_result,
@@ -37,6 +37,14 @@ def _post(head_sha: str, state: str, description: str) -> None:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if repo:
         emit_status.emit_status(repo, head_sha, CONTEXT, state, description, _run_url())
+
+
+def _read_text(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return None
 
 
 def _load_manifest_nodes(path: str) -> dict:
@@ -79,7 +87,6 @@ def cmd_run_gate(args) -> int:
 
     defer_args = _setup_defer(args.prod_state_dir)
     profiles_dir = args.profiles_dir
-    names = _select_names(args.deployment_manifest)
 
     # AC-95: a deferred reference must fail visibly rather than silently resolve
     # against this run's own ephemeral workspace — check before any dbt command runs.
@@ -90,6 +97,14 @@ def cmd_run_gate(args) -> int:
             print(f"ERROR: {e}", flush=True, file=sys.stderr)
             _post(head_sha, "failure", f"Gate 4: {e}")
             return 1
+
+    scope = decide_gate4_scope(_read_text(args.deployment_manifest), exclude_ephemeral=True)
+    if not isinstance(scope, Run):
+        state, desc, report = scope_outcome(scope, head_sha)
+        _write_gate_result(args.output, report)
+        _post(head_sha, state, desc)
+        print(f"Gate 4 scope: {desc}", flush=True)
+        return 0 if state == "success" else 1
 
     subprocess.run(
         ["dbt", "deps", "--project-dir", runner_io.project_dir(),
@@ -105,8 +120,7 @@ def cmd_run_gate(args) -> int:
         "--target", TARGET, "--target-path", "target/data-test",
         "--exclude", "test_type:unit",
     ] + defer_args
-    if names:
-        cmd.extend(["--select", " ".join(names)])
+    cmd.extend(["--select", " ".join(scope.names)])
     subprocess.run(cmd, env=env)
 
     run_results: dict | None = None

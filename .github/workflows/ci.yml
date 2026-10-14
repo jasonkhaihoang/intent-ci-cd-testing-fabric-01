@@ -1596,6 +1596,7 @@ jobs:
         with:
           name: deployment-manifest-${{ github.event.pull_request.head.sha }}
           path: reports/
+        continue-on-error: true
 
       - name: Run Gate 4
         env:

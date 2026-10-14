@@ -19,6 +19,10 @@ dbt-redshift==1.11.1
 dbt-bigquery==1.12.1
 dlt==1.30.0
 
+# SQLFluff lint toolchain: domain-cicd's Gate 0 (ci/static-check) and the Domain pre-commit hook /install-ci installs (VD-6502)
+sqlfluff==4.4.0
+sqlfluff-templater-dbt==4.4.0
+
 # Databricks moves as one set with dlt: the adapter, the SDK and the SQL connector all
 # refresh through the SDK, so a bump to any member re-runs the Databricks acceptance run.
 # dbt-databricks 1.12.5 caps dbt-core below 1.12.4; 1.12.6 is the first release that

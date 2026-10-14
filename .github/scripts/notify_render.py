@@ -482,6 +482,13 @@ def render_gate_4(result: dict | None) -> str:
     overall = result.get("overall_status", "")
     passed = overall == "pass"
 
+    if overall == "skipped":
+        return (
+            "## Data Tests (ci/data-tests) ⏭️ Skipped\n\n"
+            "No models are in scope for this PR (the modified-model closure is empty), "
+            "so no data tests ran.\n"
+        )
+
     session_error = result.get("session_error")
     if overall == "error" or session_error:
         cause = session_error or result.get("error") or "Session error"
