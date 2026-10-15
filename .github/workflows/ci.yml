@@ -1598,10 +1598,10 @@ jobs:
           path: reports/
         continue-on-error: true
 
-      - name: FAULT INJECTION (VD-6788 AC-120) — corrupt the manifest for Gate 4 only
+      - name: FAULT INJECTION (VD-6788 AC-120) — remove the manifest for Gate 4 only
         run: |
           mkdir -p reports
-          printf '{ not valid json' > "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json"
+          rm -f "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json"
 
       - name: Run Gate 4
         env:
