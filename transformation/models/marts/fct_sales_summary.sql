@@ -1,4 +1,3 @@
--- VD-6788 live validation: non-empty closure
 -- Model: fct_sales_summary
 -- Grain: one row per sales region.
 SELECT
