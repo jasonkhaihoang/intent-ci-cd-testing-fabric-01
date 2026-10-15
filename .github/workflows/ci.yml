@@ -1598,6 +1598,11 @@ jobs:
           path: reports/
         continue-on-error: true
 
+      - name: FAULT INJECTION (VD-6788 AC-120) — remove the manifest for Gate 4 only
+        run: |
+          mkdir -p reports
+          rm -f "reports/deployment-manifest-${{ github.event.pull_request.head.sha }}.json"
+
       - name: Run Gate 4
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
