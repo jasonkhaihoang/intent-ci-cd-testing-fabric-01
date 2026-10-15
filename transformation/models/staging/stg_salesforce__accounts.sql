@@ -1,3 +1,4 @@
+-- VD-6788 live validation: non-empty closure
 -- Model: stg_salesforce__accounts
 -- Grain: one row per Salesforce account.
 -- Source: source('salesforce', 'account')
