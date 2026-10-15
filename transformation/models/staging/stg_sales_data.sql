@@ -1,3 +1,4 @@
+-- VD-6788 live validation: non-empty closure
 -- Model: stg_sales_data
 -- Grain: one row per sale transaction.
 -- Source: {{ ref('sales_data') }} seed
