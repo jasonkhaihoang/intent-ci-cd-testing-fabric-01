@@ -1,3 +1,4 @@
+-- ci-test marker
 -- Model: fct_sales_summary
 -- Grain: one row per sales region.
 SELECT
