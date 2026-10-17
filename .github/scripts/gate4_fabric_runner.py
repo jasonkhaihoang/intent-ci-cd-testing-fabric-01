@@ -1,4 +1,4 @@
-"""Thin shell for Gate 4 (ci/data-tests) on Fabric GHA runner (AC-11)."""
+"""Thin shell for Gate 4 (ci/data-tests) on Fabric GHA runner."""
 from __future__ import annotations
 
 import argparse
@@ -88,7 +88,7 @@ def cmd_run_gate(args) -> int:
     defer_args = _setup_defer(args.prod_state_dir)
     profiles_dir = args.profiles_dir
 
-    # AC-95: a deferred reference must fail visibly rather than silently resolve
+    # A deferred reference must fail visibly rather than silently resolve
     # against this run's own ephemeral workspace — check before any dbt command runs.
     if defer_args:
         try:

@@ -1,8 +1,8 @@
-"""Pure thin interface: which models does Gate 4 (`ci/data-tests`) test? (VD-6788)
+"""Pure thin interface: which models does Gate 4 (`ci/data-tests`) test?
 
 `decide_gate4_scope` turns the deployment manifest's already-read text into one of
 three decisions, so the runners never run `dbt test` outside the PR's modified-model
-closure (AC-119, AC-120). No I/O: the shell reads the file and passes `None` when it
+closure. No I/O: the shell reads the file and passes `None` when it
 is missing or unreadable.
 """
 from __future__ import annotations

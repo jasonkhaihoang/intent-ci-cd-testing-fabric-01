@@ -1,4 +1,4 @@
-"""Deliver a tracked code folder to the flat OneLake folder its notebook reads (VD-5847).
+"""Deliver a tracked code folder to the flat OneLake folder its notebook reads.
 
 The dlt runner copies `/lakehouse/default/Files/<slug>/ingestion` at run time and a dbt
 job notebook `Files/<slug>/transformation`, so each folder is the one copy: git is the
@@ -77,7 +77,7 @@ def read_source(source, rel):
 
 
 def check_source_path(rel):
-    """Local delivery guard, not a replacement for domain-cicd's full publish policy."""
+    """Local delivery guard, not a replacement for the CI bundle's full publish policy."""
     safe_path(rel)
     parts = rel.split("/")
     forbidden = {".git", ".vibedata", "__pycache__", ".agents_tmp", ".pytest_cache", ".ruff_cache",

@@ -54,7 +54,7 @@ def _read_text(path: str) -> str:
 
 
 def build_llm_url(api_url: str) -> str:
-    """AC-66: build the chat-completions URL for any LLM_API_URL base-URL shape."""
+    """Build the chat-completions URL for any LLM_API_URL base-URL shape."""
     base = api_url.rstrip("/")
     if base.endswith("/chat/completions"):
         return base
@@ -164,8 +164,7 @@ def main(argv: list[str]) -> int:
         prompt = build_llm_prompt(design_text, manifest, sorted(set(modified_names) | record_artifacts))
         llm_content = call_llm(api_key, prompt, api_url, model)
     except Exception as e:  # gather/call failure → emit failure status, exit 1
-        # Print before posting: the fake-world harness reads only stdout, and a failed status post
-        # must not replace the original diagnostic (AC-26).
+        # Print before posting: a failed status post must not replace the original diagnostic.
         print(f"design-drift error: {type(e).__name__}: {e}", flush=True)
         _post(args.head_sha, "failure", f"design-drift error: {type(e).__name__}: {e}")
         _post_pr_comment(args.pr_number, result=None)

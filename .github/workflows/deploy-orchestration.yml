@@ -1,4 +1,4 @@
-# Production deploy for committed Fabric orchestration items (VD-4729).
+# Production deploy for committed Fabric orchestration items.
 #
 # Deployment publishes code objects; orchestration runs them afterwards. This
 # workflow only ever publishes: it applies the committed items and reconciles
@@ -29,24 +29,19 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      # act binds the workspace directly and the fake world serves tokens through
-      # an `az` shim, so both of these are real-world-only — the same gating every
-      # other fake-world-tested workflow in this bundle applies.
       - uses: actions/checkout@v5
-        if: vars.FAKE_WORLD == ''
 
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       # The deploy reads .workflow/ci-config.yml to name the Lakehouse the notebooks
-      # attach (VD-5847), and parses transformation/ for the production manifest an
+      # attach, and parses transformation/ for the production manifest an
       # Intent run defers to. The adapter versions come from the managed constraints, the same
       # file the plugin's job notebook template embeds.
       - run: pip install -c .github/managed-constraints.txt --quiet pyyaml dbt-core dbt-fabricspark
 
       - name: Azure login (OIDC)
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars.CD_TENANT_ID }}

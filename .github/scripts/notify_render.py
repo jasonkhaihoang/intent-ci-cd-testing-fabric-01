@@ -370,18 +370,17 @@ def _render_shortcut_seeding(report: dict | None) -> str:
 
 
 def _ephemeral_database_line(result: dict) -> str:
-    """Render the per-PR database name, or "" when the producer supplied none (AC-10).
+    """Render the per-PR database name, or "" when the producer supplied none.
 
     The name is an **operator correlation handle only** — it ties a CI log line to a
     MotherDuck object. No interactive surface hangs off it: the database is reachable by
-    the CI service account alone (AC-93), so a Dive link or local dbt snippet would point
+    the CI service account alone, so a Dive link or local dbt snippet would point
     somewhere no reader can go.
 
     `db_name` is a MotherDuck-only key. This renderer is shared with the Fabric bundle,
     whose Gate 2 emits no such key — an ephemeral Fabric *workspace* is a different
     concept with a different lifecycle, and it must not borrow this wording. The
-    contract is enforced, not assumed: see the invariant in
-    tests/unit/domain_pr_review_approval/test_motherduck_no_share_or_dive.py.
+    contract is enforced by an invariant test, not assumed.
     """
     db_name = result.get("db_name")
     return f"\n_Ephemeral database: `{db_name}`_\n" if db_name else ""
@@ -396,7 +395,7 @@ def render_gate_2(result: dict | None) -> str:
     session_error = result.get("session_error")
     if overall == "error" or session_error:
         cause = session_error or result.get("error") or "Session error"
-        # AC-10: name the database here too when the crash happened after the clone —
+        # Name the database here too when the crash happened after the clone —
         # this is the path with a failure to investigate, so withholding the operator's
         # correlation handle would be worst exactly where it is most needed.
         db_line = _ephemeral_database_line(result)
@@ -570,7 +569,7 @@ def render_gate_5(result: dict | None) -> str:
 
     # Partition: errored artifacts (any non-null `error` field) are split out
     # from genuinely brand-new ones so failed prod-baseline lookups are visible
-    # rather than silently rendered as auto-passes (VD-2097).
+    # rather than silently rendered as auto-passes.
     errored = [a for a in artifacts if a.get("error")]
     brand_new = [a for a in artifacts if a.get("baseline") is None and not a.get("error")]
     existing = [a for a in artifacts if a.get("baseline") is not None and not a.get("error")]
@@ -1150,7 +1149,7 @@ def render_gate_1_comment(
 ) -> str:
     """Render the ci/state-modified+ PR comment.
 
-    When `platform_error` is set (VD-1596 Phase 2 artifact-mode failure), the
+    When `platform_error` is set (artifact-mode failure), the
     body distinguishes a platform error from greenfield by carrying the
     Mode / Category / Reason triple plus a remediation footer that tells the
     operator to re-run the job or push a new commit. `platform_error` keys:
@@ -1169,7 +1168,7 @@ def render_gate_1_comment(
         category = platform_error.get("category", "")
         reason = platform_error.get("reason", "")
 
-        # version_mismatch/provenance_missing (VD-5832) are not transport failures — the
+        # version_mismatch/provenance_missing are not transport failures — the
         # fetch succeeded, but the baseline fails a parity policy. "Re-run this job" is
         # actively wrong advice here: a re-run reproduces the identical outcome, since
         # nothing about the job's inputs changed. Each gets its own banner + remediation.
@@ -1381,8 +1380,9 @@ def _preflight_remediation_footer(result: dict) -> str:
     intent = result.get("intent", {})
     if intent.get("status") == "fail":
         bullets.append(
-            "- **intent:** Slug must match `intent/vd-<linear-number>-<kebab-summary>`, "
-            "e.g. `intent/vd-2062-gate3-v2`. Rename the branch and push."
+            "- **intent:** The branch name must be `intent/<slug>`. The slug uses only lowercase "
+            "letters, digits and hyphens, and starts with a letter or a digit (for example, "
+            "`intent/orders-daily-refresh`). Rename the branch and push."
         )
 
     ci = result.get("ci_config", {})
@@ -1420,7 +1420,7 @@ def render_preflight_comment(result: dict | None) -> str:
     """Render the <!-- ci-preflight --> upserted PR comment section.
 
     Rows always shown: auto-rebase (informational), intent, ci-config.
-    Capacity row added when the report carries one (Fabric lanes, AC-105).
+    Capacity row added when the report carries one (Fabric lanes).
     Violation row added only when auto_merge_disabled check failed.
     """
     if not result:
@@ -1456,7 +1456,7 @@ def render_preflight_comment(result: dict | None) -> str:
 
     rows.append(f"| ci-config | {ci_icon} | {ci_detail} |")
 
-    # Fabric lanes only (AC-105): absent on platforms with no capacity to check.
+    # Fabric lanes only: absent on platforms with no capacity to check.
     capacity = result.get("capacity")
     if capacity:
         capacity_icon = "✅" if capacity.get("passed") else "❌"
@@ -1582,8 +1582,8 @@ ADR_NUMBERING_MARKER = "<!-- ci-adr-numbering -->"
 
 
 def render_adr_numbering_comment(duplicates: dict, dangling: list) -> str:
-    """AC-87: own marker, upserted every run. AC-88: findings under distinct
-    headings. AC-89: all-clear (including the no-ADR-files short-circuit,
+    """Own marker, upserted every run. Findings under distinct
+    headings. All-clear (including the no-ADR-files short-circuit,
     which passes empty duplicates/dangling here same as a clean, populated run)."""
     if not duplicates and not dangling:
         return (

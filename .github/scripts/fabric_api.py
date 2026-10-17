@@ -118,7 +118,7 @@ def cmd_teardown(args):
 
 
 def cmd_cleanup(args):
-    # The decision and the delete loop are shared with the Warehouse lane (VD-5243).
+    # The decision and the delete loop are shared with the Warehouse lane.
     if not fabric_workspace_cleanup.cleanup(
         args.repo, getattr(args, "pr_number", None), os.environ.get("GH_TOKEN", "")
     ):
@@ -322,7 +322,7 @@ def _translate_keys(source: dict, key_map: dict) -> dict:
 
 
 def _load_spark_compute_overrides(ci_config_path: str) -> dict:
-    """Read the optional `spark_compute` stanza from a domain's ci-config.yml (AC-50).
+    """Read the optional `spark_compute` stanza from a domain's ci-config.yml.
 
     Translates its snake_case keys to the camelCase fields the Fabric
     `staging/sparkcompute` endpoint expects. Only keys actually present in
@@ -366,7 +366,7 @@ def create_environment(workspace_id: str, config_path: str, ci_config_path: str 
     Returns the environment ID. Emits environment_id and environment_name to GITHUB_OUTPUT.
     Idempotent: if an environment with the same name already exists, reuses it.
 
-    Spark compute (AC-50) is domain-controlled: the instance pool is always Fabric's
+    Spark compute is domain-controlled: the instance pool is always Fabric's
     built-in Starter Pool (not configurable), and driver/executor sizing is optionally
     overridden from `ci_config_path`'s `spark_compute` stanza.
     """
@@ -391,7 +391,7 @@ def create_environment(workspace_id: str, config_path: str, ci_config_path: str 
         print(f"Created environment '{env_name}' ({env_id})", flush=True)
 
     # Always configure spark compute against the fixed Starter Pool, merging in
-    # any domain-supplied driver/executor overrides (AC-50).
+    # any domain-supplied driver/executor overrides.
     # Skip only when REUSING an environment that was already published on a prior
     # push to this same PR — re-PATCHing staging on a published environment triggers
     # full pool-size validation and fails on constrained capacities (e.g. F4's Starter
@@ -540,7 +540,7 @@ def main():
     p4.add_argument(
         "--ci-config",
         default=None,
-        help="Path to the domain's ci-config.yml; reads its optional spark_compute overrides (AC-50)",
+        help="Path to the domain's ci-config.yml; reads its optional spark_compute overrides",
     )
     p5 = sub.add_parser("publish-environment")
     p5.add_argument("--workspace-id", required=True)
