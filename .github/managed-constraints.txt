@@ -44,9 +44,7 @@ vibedata-dlt-core==0.6.0
 vibedata-dlt-fabric-notebook==0.10.0
 vibedata-dlt-fabric-studio==0.18.1
 vibedata-dlt-fabric-warehouse-studio==0.5.0
-vibedata-dlt-duckdb-core==0.3.0
 vibedata-dlt-duckdb-studio==0.11.0
-vibedata-motherduck-flight==0.1.0
 vibedata-dlt-studio-secrets==0.2.0
 vibedata-studio-azure-cred-broker==0.1.4
 

@@ -1,8 +1,8 @@
-"""Imperative shell for the immutable per-build manifest release.
+"""Imperative shell for the immutable per-build manifest release (AC-14..AC-18).
 
 Gathers, for `dbt-manifest-<sha>`: whether it exists, and if so, per-asset presence and content
 match against this run's assets -- yielding one of `absent` / `complete_match` / `incomplete` /
-`complete_mismatch`. Builds `manifest-source.json` (five provenance fields) from job-local
+`complete_mismatch`. Builds `manifest-source.json` (ADR-0027/D-12's five fields) from job-local
 scalars. Calls `dbt_docs_publish.build_manifest_release_commands` exactly once with that gathered
 state and dispatches every returned `gh` command, then does the same for
 `dbt_docs_publish.build_prune_commands` over the full `dbt-manifest-*` release set. Invoked
@@ -124,8 +124,8 @@ def main(target_dir: str, sha: str, asset_names: list[str]) -> int:
     except subprocess.CalledProcessError as exc:
         # Matches _gather_release_state's existing safety net for `gh release view`: a
         # bare CalledProcessError with no visible reason is exactly what made three
-        # separate real CI failures on this exact call undiagnosable without guessing.
-        # Print everything available -- stdout included, since a partial
+        # separate real CI failures on this exact call undiagnosable without guessing
+        # (VD-5839). Print everything available -- stdout included, since a partial
         # response before a mid-stream failure can also be diagnostic.
         print(
             f"gh release list exited {exc.returncode}:\n"

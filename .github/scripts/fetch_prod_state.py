@@ -36,7 +36,7 @@ from dbt_version_provenance import pin_install_recorded_versions
 ONELAKE_DFS = "https://onelake.dfs.fabric.microsoft.com"
 
 
-# ─── Artifact-mode result types ──────────────────────────────────────────
+# ─── Artifact-mode result types (VD-1596 Phase 2) ─────────────────────────────
 #
 # Artifact mode distinguishes three outcomes:
 #   - success    : manifest fetched and written to prod-state/
@@ -51,9 +51,9 @@ ONELAKE_DFS = "https://onelake.dfs.fabric.microsoft.com"
 #   parse     — manifest absent from the per-build release, or invalid JSON inside it, or the
 #               per-build release's provenance disagrees with the `dbt-docs-latest` pointer
 #   auth      — the release lookup 404'd and so did the repo itself (permission/visibility)
-#   version_mismatch   — the baseline's recorded dbt/adapter version could not be installed
-#   provenance_missing — a manifest with no usable manifest-source.json (an older baseline)
-# (`config` is onelake-mode-only: artifact mode reads a fixed tag and
+#   version_mismatch   — the baseline's recorded dbt/adapter version could not be installed (VD-5832)
+#   provenance_missing — a manifest with no usable manifest-source.json (pre-VD-5839 baseline)
+# (`config` is onelake-mode-only since VD-4418: artifact mode reads a fixed tag and
 # has no required ci-config.yml key left to be missing.)
 # (In onelake mode `auth` is a Fabric UAMI/401/403 failure — see OnelakeResult below.)
 
@@ -63,7 +63,7 @@ class ArtifactResult(NamedTuple):
     reason: str | None = None
 
 
-# ─── Onelake-mode result type ────────────────────────────────────────
+# ─── Onelake-mode result type (VD-3216) ───────────────────────────────────────
 #
 # Mirrors ArtifactResult. A 404 on the fixed canonical OneLake manifest path is
 # the confirmed-greenfield signal: domain-deploy always publishes to this same
@@ -135,7 +135,7 @@ def fetch_artifact_mode(cfg: dict) -> ArtifactResult:
     """Fetch the prod-state baseline, pinned to the dbt/adapter version that produced it.
 
     Returns an ArtifactResult -- see ArtifactResult docstring for the statuses and the
-    category mapping.
+    category mapping (VD-5832 adds `version_mismatch` and `provenance_missing`).
 
     `dbt-docs-latest` is only a pointer: its asset list classifies greenfield vs.
     provenance-missing, and its `manifest-source.json` names the `build_sha` plus the
@@ -144,7 +144,7 @@ def fetch_artifact_mode(cfg: dict) -> ArtifactResult:
     A version that cannot be installed IS the version-mismatch signal (no post-hoc compare).
 
     The mode keeps the name `artifact` because it is the operator-facing
-    `prod_manifest_source.mode` value; only the transport underneath changed.
+    `prod_manifest_source.mode` value; only the transport underneath changed (VD-4418).
     """
     repo = os.environ.get("REPO", "")
     head_sha = os.environ.get("HEAD_SHA", "")
@@ -155,7 +155,7 @@ def fetch_artifact_mode(cfg: dict) -> ArtifactResult:
     )
     if view.returncode != 0:
         # `gh` prints "release not found" for ANY 404 on the tag lookup, including a repo the
-        # token cannot see -- confirm repo visibility before believing it. Both
+        # token cannot see -- confirm repo visibility before believing it (AC-14). Both
         # streams are checked: `gh`'s channel for CLI errors is not a documented contract.
         combined_output = f"{view.stdout} {view.stderr}".lower()
         if "release not found" in combined_output:
@@ -187,7 +187,7 @@ def fetch_artifact_mode(cfg: dict) -> ArtifactResult:
         return ArtifactResult("error", "transient", reason)
 
     if "manifest.json" not in assets and PROVENANCE_ASSET not in assets:
-        # Docs-only release (a domain still on an older bundle) -- true greenfield.
+        # Docs-only release (a domain still on a pre-VD-4418 bundle) -- true greenfield.
         runner_io.notice(
             "No prod manifest published on the CD release — true "
             "greenfield (full build)."
@@ -282,7 +282,7 @@ def fetch_artifact_mode(cfg: dict) -> ArtifactResult:
         # Only now may prod-state/ exist: its presence is what makes "Show modified set" run.
         os.makedirs("prod-state", exist_ok=True)
         shutil.copy2(manifest_src, "prod-state/manifest.json")
-        # Also copy prod-target manifest for --defer resolution in gates 2/4.
+        # Also copy prod-target manifest for --defer resolution in gates 2/4 (VD-2142).
         manifest_prod_src = os.path.join(tmpdir, "manifest_prod.json")
         if os.path.exists(manifest_prod_src):
             shutil.copy2(manifest_prod_src, "prod-state/manifest_prod.json")
@@ -296,7 +296,7 @@ def fetch_onelake_mode(cfg: dict) -> OnelakeResult:
     """Download manifest from OneLake Files path via Fabric UAMI.
 
     Returns an OnelakeResult — see OnelakeResult docstring for the three
-    possible statuses and category mapping.
+    possible statuses and category mapping (VD-3216).
     """
     workspace_id = cfg.get("workspace_id", "")
     lakehouse_id = cfg.get("lakehouse_id", "")

@@ -21,8 +21,9 @@ Malformed LLM responses produce a deterministic single-finding result of
 kind="malformed_llm_response" — the function never raises.
 
 Detection itself — whether the LLM's verdict is *correct* for a given
-design-record/manifest pair — is the LLM's job and is covered by evals,
-not by unit tests. Those only verify this module's passthrough/validation contract:
+design-record/manifest pair — is the LLM's job and is covered by evals
+(VD-5043), not by tests/unit/domain_pr_review_approval/test_design_drift.py.
+That file only verifies this module's passthrough/validation contract:
 a well-formed verdict returned unmodified, a malformed one falling closed.
 """
 from __future__ import annotations
@@ -88,8 +89,8 @@ def parse_llm_content(content: str) -> dict | None:
     answer). Returns None if nothing parses as a JSON object; run_design_drift
     feeds that into _validate_llm_response's existing fail-closed path.
 
-    Known, accepted limitations (accepted rather than requiring a full JSON
-    tokenizer):
+    Known, accepted limitations (VD-4532 fix-direction point 3 explicitly
+    accepts this residual risk rather than requiring a full JSON tokenizer):
     this returns the last fragment that *parses*, not necessarily the
     model's actual last-written one — if a complete valid example precedes a
     real answer that gets truncated mid-object, the complete example is

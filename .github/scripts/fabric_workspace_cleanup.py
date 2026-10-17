@@ -8,7 +8,7 @@ Warehouse bundle's `workspace-cleanup.yml` invokes this module directly.
 CLI:
     fabric_workspace_cleanup.py --repo OWNER/REPO [--pr-number N]
 
-Authentication: the workflow's azure/login session (the CI identity).
+Authentication: the workflow's azure/login session (the CI identity, AC-31, AC-116).
 Writes `workspace-cleanup-audit.json`; exits 1 when any delete failed.
 """
 from __future__ import annotations

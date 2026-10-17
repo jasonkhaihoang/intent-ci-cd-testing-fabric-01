@@ -1,4 +1,4 @@
-"""Thin shell for the required-gate status sweep.
+"""Thin shell for the required-gate status sweep (VD-5918, SB-18).
 
 gather → call → dispatch:
   1. Read the workflow's own `needs` result map (passed as JSON by ci.yml) and

@@ -1,7 +1,7 @@
 """
 Derive OneLake shortcuts the ephemeral lakehouse needs from dbt manifest analysis.
 
-AWAP v1.4 Phase 3 — Slice 1. Pure derivation: no Fabric API calls.
+AWAP v1.4 Phase 3 — Slice 1 (VD-1658). Pure derivation: no Fabric API calls.
 The output JSON is consumed by Slice 2's `fabric_api.py seed-shortcuts` subcommand.
 
 Logic:
