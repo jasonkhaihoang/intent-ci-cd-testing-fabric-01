@@ -1,3 +1,4 @@
+-- ci-test marker
 -- Model: stg_sales_data
 -- Grain: one row per sale transaction.
 -- Source: {{ ref('sales_data') }} seed
