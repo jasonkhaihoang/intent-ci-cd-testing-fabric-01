@@ -160,8 +160,8 @@ def dfs_list(workspace, directory, *, page_limit=100):
 
 
 def _fabric_api_base() -> str:
-    """Read FABRIC_API_BASE_URL per call (not at import time) so a
-    caller can override it without reloading this module — same pattern as
+    """Read FABRIC_API_BASE_URL per call (not at import time) so a fake-world
+    test can override it without reloading this module — same pattern as
     emit_status.py's GITHUB_API_BASE_URL / fetch_prod_state.py's
     ONELAKE_DFS_BASE_URL."""
     return os.environ.get("FABRIC_API_BASE_URL", "https://api.fabric.microsoft.com/v1")

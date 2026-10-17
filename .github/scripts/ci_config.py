@@ -47,7 +47,7 @@ _FABRIC_REQUIRED_KEYS = [
 # is load-bearing rather than cosmetic: the Intent's bridge Lakehouse — and the CI
 # bridge that mirrors it — must carry the Domain Warehouse's name verbatim, because a
 # three-part TDS name records no workspace and only resolves against an item of
-# exactly that name.
+# exactly that name. See docs/design/data-platform/platform-contract.md in vd-studio.
 _FABRIC_WAREHOUSE_REQUIRED_KEYS = [
     "VD_DOMAIN_SLUG",
     "VD_DOMAIN_FABRIC_WAREHOUSE_WORKSPACE_ID",
@@ -77,9 +77,9 @@ _REQUIRED_KEYS_BY_PLATFORM = {
     DUCKDB_LOCAL: _DUCKDB_LOCAL_REQUIRED_KEYS,
 }
 
-# The indirection block is validated permissively on purpose: an
+# The ADR-0018 indirection block is validated permissively on purpose: an
 # unrecognised key passes through so an older repository does not break on a
-# stale one. No `*_VAR` key is required here — a mapping can
+# stale one (AC-11 / VD-5013). No `*_VAR` key is required here — a mapping can
 # be present and correct while the Variable it names is unset, so requiring the
 # key would not catch the real failure anyway. Validating that a named Variable
 # actually resolves needs the workflow to pass `${{ vars[...] }}` in, which is a
@@ -91,7 +91,7 @@ def _is_blank(value) -> bool:
 
     `KEY:` with nothing after it parses as None, and `KEY: ""` as the empty
     string. Both satisfy a presence check while breaking every consumer, which
-    is the same failure seen from the other direction.
+    is the shape VD-5156 surfaced from the other direction.
     """
     return value is None or (isinstance(value, str) and value.strip() == "")
 
@@ -100,7 +100,7 @@ def require_indirection_key(config: dict, key: str) -> dict:
     """Return the GitHub Actions name a `*_VAR` indirection key holds, or an error naming the key.
 
     Pure and deliberately not part of `parse_ci_config`'s validation: that stays permissive about
-    `*_VAR` keys. Callers with no safe default name (the MotherDuck cleanup) use
+    `*_VAR` keys (AC-11). Callers with no safe default name (the MotherDuck cleanup, AC-113) use
     this to fail closed instead of falling back to a literal secret name.
     """
     value = config.get(key)
@@ -112,7 +112,7 @@ def require_indirection_key(config: dict, key: str) -> dict:
 # Committed coordinate key -> legacy lowercase key every existing downstream
 # consumer (preflight.py's GITHUB_OUTPUT writer, ci.yml's `outputs.*` refs,
 # fabric_api.py) already expects. VD_DOMAIN_SCHEMA has no entry here —
-# confirmed dead, dropped rather than renamed.
+# confirmed dead (VD-3440 AC-64), dropped rather than renamed.
 _KEY_ALIASES = {
     "VD_DOMAIN_DATA_PLATFORM": "platform",
     "VD_DOMAIN_SLUG": "domain",
@@ -134,8 +134,8 @@ _KEY_ALIASES = {
 }
 
 # duckdb-quack is handled below with a specific migration message before this check.
-# The accepted values are owned by platform_enum so every consumer that branches
-# on platform reads the same set.
+# The accepted values are owned by platform_enum (AC-90) so every consumer that branches
+# on platform reads the same set — see docs/design/bundle-manifest-composition/README.md.
 _VALID_PLATFORMS = VALID_PLATFORMS
 
 

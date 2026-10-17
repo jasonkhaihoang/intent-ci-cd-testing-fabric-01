@@ -3,7 +3,7 @@
 All formatting logic lives in notify_render. This module owns I/O only:
 reading JSON reports from reports/ and calling pr_comment.upsert.
 
-Backward-compatible re-exports keep older imports of these names working.
+Backward-compatible re-exports preserve existing test_notify.py imports.
 """
 
 import json
@@ -87,7 +87,7 @@ except ImportError:
     )
 
 
-# ─── backward-compat aliases ──────────────────────────────────────────────────
+# ─── backward-compat aliases (test_notify.py imports these names) ─────────────
 
 format_ruff = render_ruff
 format_sqlfluff = render_sqlfluff

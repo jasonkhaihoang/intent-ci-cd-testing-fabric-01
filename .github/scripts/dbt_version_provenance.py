@@ -1,4 +1,4 @@
-"""Shared dbt/adapter version resolution and pinned install.
+"""Shared dbt/adapter version resolution and pinned install (VD-5832).
 
 `resolve_installed_versions` is the promoted publish-side implementation (previously
 `publish_manifest_release._resolve_dbt_versions`) -- both the publish workflow and a Gate 1
@@ -7,7 +7,7 @@ two different things between them.
 
 `pin_install_recorded_versions` is the consume-side thin interface: it installs exactly the
 versions recorded in a baseline's provenance, so a disagreement surfaces as an install
-failure rather than a post-hoc comparison.
+failure (AC-105/106) rather than a post-hoc comparison.
 """
 import importlib.metadata
 import re

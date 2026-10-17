@@ -1,4 +1,4 @@
-"""Thin shell for Gate 2 (ci/run) on Fabric GHA runner.
+"""Thin shell for Gate 2 (ci/run) on Fabric GHA runner (AC-11).
 
 Orchestrates: env setup → dbt deps → dbt clone → dbt run → parse results → emit status.
 authentication: CLI in profiles.yml uses az account get-access-token after azure/login.
@@ -96,7 +96,7 @@ def cmd_run_gate(args) -> int:
     head_sha = args.head_sha
     _post(head_sha, "pending", "Gate 2: cloning and running dbt on Fabric runner")
 
-    # A missing manifest means the download step failed — fail loudly, never a silent 0-models pass.
+    # AC-24.3: A missing manifest means the download step failed — fail loudly, never a silent 0-models pass.
     if not os.path.isfile(args.deployment_manifest):
         print(
             f"ERROR: deployment manifest not found: {args.deployment_manifest}",
@@ -121,7 +121,7 @@ def cmd_run_gate(args) -> int:
     defer_args = _setup_defer(args.prod_state_dir)
     profiles_dir = args.profiles_dir
 
-    # A deferred reference must fail visibly rather than silently resolve
+    # AC-95: a deferred reference must fail visibly rather than silently resolve
     # against this run's own ephemeral workspace — check before any dbt command runs.
     if defer_args:
         try:
@@ -138,7 +138,7 @@ def cmd_run_gate(args) -> int:
         env=env,
     )
 
-    # Seed before clone/build so a state:modified model's ref()
+    # AC-78/AC-79: seed before clone/build so a state:modified model's ref()
     # to a dbt seed resolves. Unconditional — the deployment manifest lists
     # only models, never seeds, so there is no principled subset to select;
     # --defer/--state do not apply (seeds have no ref()/source() upstream).
@@ -180,7 +180,7 @@ def cmd_run_gate(args) -> int:
                 pass
         else:
             # Views cannot be shallow-cloned (dbt clone falls back to CREATE VIEW
-            # against a 2-part prod ref that fails in the ephemeral workspace).
+            # against a 2-part prod ref that fails in the ephemeral workspace — VD-2336).
             # Clone only clone-eligible (non-view) models; dbt run --defer builds the
             # full set, including views, fresh in the ephemeral workspace.
             if clone_names:
@@ -212,7 +212,7 @@ def cmd_run_gate(args) -> int:
                     pass
 
                 # Build unmodified view models referenced as unit test fixture given
-                # inputs so Gate 3's get_columns_in_relation() can resolve them.
+                # inputs so Gate 3's get_columns_in_relation() can resolve them (VD-2375).
                 view_inputs = _select_unit_test_view_inputs(
                     runner_io.target_path("target/build/manifest.json"), set(names)
                 )
@@ -226,7 +226,7 @@ def cmd_run_gate(args) -> int:
 
                 # Clone unmodified table/incremental/materialized_view models referenced
                 # as unit test fixture given inputs so Gate 3's get_columns_in_relation()
-                # can resolve them. Uses dbt clone (not dbt run) since these
+                # can resolve them (VD-2377). Uses dbt clone (not dbt run) since these
                 # materializations are clone-eligible.
                 table_inputs = _select_unit_test_table_inputs(
                     runner_io.target_path("target/build/manifest.json"), set(names)

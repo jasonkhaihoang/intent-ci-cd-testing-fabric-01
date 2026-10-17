@@ -1,4 +1,4 @@
-"""Terminal-status sweep for required gates that never ran.
+"""Terminal-status sweep for required gates that never ran (VD-5918, SB-18).
 
 Each gate job posts its own commit status. A job that is skipped or cancelled
 posts nothing, so its required context stays `pending` for ever: branch
@@ -27,7 +27,8 @@ class SweepStatus(NamedTuple):
 
 # Required context -> the ci.yml job that owns emitting it. Order is the gate
 # ladder's own order; it drives both the sweep order and the order causes are
-# named in. Must stay in sync with ci.yml and configure_repo.py.
+# named in. Locked against ci.yml and configure_repo.py by
+# tests/unit/domain_pr_review_approval/test_ci_yml_status_sweep.py.
 _FABRIC_OWNERS = {
     "ci/preflight": "preflight",
     "ci/adr-numbering": "adr-numbering",

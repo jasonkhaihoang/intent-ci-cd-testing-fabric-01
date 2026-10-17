@@ -1,4 +1,4 @@
-"""Shared pure helpers for Fabric GHA gate runner scripts.
+"""Shared pure helpers for Fabric GHA gate runner scripts (AC-11).
 
 Extracted here to eliminate duplication across gate2/3/4/5_fabric_runner.py.
 Each function is stateless and takes only pre-fetched scalar inputs.
@@ -51,7 +51,7 @@ def select_clone_names(deployment_manifest_path: str) -> list[str]:
 
     Views cannot be shallow-cloned — dbt clone falls back to running the view
     materialization, which the fabricspark macro renders as CREATE VIEW against a
-    2-part prod ref that fails in the ephemeral workspace. Views are
+    2-part prod ref that fails in the ephemeral workspace (VD-2336). Views are
     built by the subsequent `dbt run --defer` instead, so they are dropped here.
     """
     return [
@@ -63,18 +63,18 @@ def select_clone_names(deployment_manifest_path: str) -> list[str]:
 
 class DeferManifestMissingWorkspaceError(RuntimeError):
     """Raised when a project-owned model in the staged defer manifest lacks
-    workspace_name — a deferred reference to it would otherwise
+    workspace_name (AC-95) — a deferred reference to it would otherwise
     silently resolve against the consuming run's own ephemeral workspace
     instead of failing visibly."""
 
 
 def find_deferred_nodes_missing_workspace(manifest: dict) -> list[str]:
     """Pure: leaf names of this project's own non-ephemeral models in `manifest`
-    whose config lacks a workspace_name.
+    whose config lacks a workspace_name (AC-95).
 
     Scoped to `metadata.project_name` so dependency-package models (e.g. an
     installed dbt package) are never flagged — only this project's own models
-    are meant to carry the injected workspace_name.
+    are meant to carry the injected workspace_name (domain-deploy AC-13).
     Ephemeral models are excluded: they compile inline as CTEs and never
     resolve to a real relation, so they never need one.
     """
@@ -94,7 +94,7 @@ def find_deferred_nodes_missing_workspace(manifest: dict) -> list[str]:
 
 def validate_defer_manifest_workspaces() -> None:
     """Raise DeferManifestMissingWorkspaceError if the manifest setup_defer just
-    staged is missing workspace_name on any project-owned model.
+    staged is missing workspace_name on any project-owned model (AC-95).
 
     No-op if the defer manifest doesn't exist (greenfield — setup_defer already
     returned [] and no --defer args are in play) or can't be parsed.
@@ -120,7 +120,7 @@ def setup_defer(prod_state_dir: str) -> list[str]:
     Returns --defer --state args if the source file exists, otherwise [].
     Used by Gates 2, 3, and 4 for cross-workspace ref resolution.
 
-    The physical copy is written under $PROJ since dbt (running with
+    The physical copy is written under $PROJ (VD-4637) since dbt (running with
     --project-dir resolved from $PROJ) looks for --state relative to its own
     project root. The returned --state value itself stays project-dir-relative
     ("target/prod-state-defer", not PROJ-prefixed) because dbt joins
