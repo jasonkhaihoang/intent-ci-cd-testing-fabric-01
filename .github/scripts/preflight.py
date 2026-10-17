@@ -34,7 +34,7 @@ def check_auto_merge_disabled(auto_merge_value) -> dict:
 
 
 def check_capacity_access(capacity_id, visible_capacity_ids) -> dict:
-    """Return {passed, message} for the Fabric capacity-grant preflight check (AC-105).
+    """Return {passed, message} for the Fabric capacity-grant preflight check.
 
     `visible_capacity_ids` is what `GET /capacities` lists for the CI identity. Creating the
     ephemeral workspace on a capacity needs permission over that capacity — a grant separate

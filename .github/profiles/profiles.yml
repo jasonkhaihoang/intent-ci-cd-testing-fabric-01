@@ -22,8 +22,8 @@ dbt_fab_spark:
     ephemeral_ci:
       authentication: CLI
       endpoint: https://msitapi.fabric.microsoft.com/v1
-      livy_mode: "{{ env_var('FAKE_WORLD_LIVY_MODE', 'fabric') }}"
-      livy_url: "{{ env_var('FAKE_WORLD_LIVY_URL', 'http://localhost:8998') }}"
+      livy_mode: fabric
+      livy_url: http://localhost:8998
       workspaceid: "{{ env_var('WORKSPACE_ID') }}"
       workspace_name: "{{ env_var('WORKSPACE_NAME') }}"
       lakehouse: "{{ env_var('LAKEHOUSE') }}"

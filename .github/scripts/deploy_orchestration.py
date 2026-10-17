@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deploy committed Fabric orchestration items to a production workspace (VD-4729).
+"""Deploy committed Fabric orchestration items to a production workspace.
 
 The domain repo is the source of truth: committed `.Notebook` and `.DataPipeline`
 directories under `orchestration/` are environment-free, and this job binds them to
@@ -64,13 +64,13 @@ except ImportError:  # invoked as `python3 path/to/deploy_orchestration.py`
 SUPPORTED_INGESTION_RUNNERS = {
     "807d97261940099aa3c8c1398cb50b7ce7ffe27c130dd71f680157b1d46d6c98": "0.107.0",
     "39ebb4db7d7997b376306b6db67612188b43ec6598cb5802cf5881277575ed61": "0.115.0",
-    # The runner title spelled "Vibedata" (VD-6640).
+    # The runner title spelled "Vibedata".
     "32861071140ce75b4aa9924230d70c0643f793aad75d5d903be0eb4df4512855": "0.118.5",
 }
 SUPPORTED_RUNNER_REVISION = list(SUPPORTED_INGESTION_RUNNERS.values())[-1]
-# Since vd-data-engineering 0.115.0 (VD-6444) the materializer embeds the managed constraints
+# Since vd-data-engineering 0.115.0 the materializer embeds the managed constraints
 # in the runner as this literal, so its bytes change with every constraints bump. The digest
-# blanks the literal's body: a constraints bump is not a different runner (VD-6642).
+# blanks the literal's body: a constraints bump is not a different runner.
 _RUNNER_CONSTRAINTS_RE = re.compile(rb'^(MANAGED_CONSTRAINTS = """).*?(""")$', re.MULTILINE | re.DOTALL)
 # A dbt job notebook is the plugin's template with its own commands written in, so it
 # is recognised by the marker its first cell carries rather than by its bytes — spelled
@@ -268,7 +268,7 @@ def attach_default_lakehouse(text, lakehouse_id, lakehouse_name, workspace_id):
     """Bind the runner's default Lakehouse — its code path — for this workspace.
 
     Fabric reads the attachment from the notebook's own metadata and honours it on
-    updateDefinition as well as create (probed live, VD-5847). Only the lakehouse
+    updateDefinition as well as create (probed live). Only the lakehouse
     key is set: the same block can carry environment/warehouse dependencies.
     Parallel copy of the plugin's `inject_default_lakehouse.py`.
     """
@@ -390,8 +390,8 @@ def publish_managed_requirements(repo_root, files):
     """Copy of `files` whose ingestion requirements carry no version on a managed package.
 
     The runner installs these under the managed constraints, where a Domain's own pin on a
-    managed package makes pip refuse; the managed version wins here as it does in the sandbox
-    (VD-6588). The names come from the delivered constraints file. A pin never blocks the
+    managed package makes pip refuse; the managed version wins here as it does in the sandbox.
+    The names come from the delivered constraints file. A pin never blocks the
     deploy: a missing or unreadable constraints file publishes the code as committed with a
     warning. The Domain's repository files are never rewritten.
     """

@@ -113,7 +113,7 @@ def fetch_status_states(repo: str, sha: str) -> dict:
     status, which is exactly the question the sweep asks: does this required
     context already carry a verdict? Reading it beats inferring one from job
     results — a job that dies before its runner posts anything concludes as
-    `failure` while its context is still `pending` (VD-5918).
+    `failure` while its context is still `pending`.
 
     Exits non-zero rather than returning a partial map: a context missing
     because the read was truncated is indistinguishable from one that has no

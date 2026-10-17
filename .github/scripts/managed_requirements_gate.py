@@ -1,11 +1,11 @@
-"""Fail a Domain change that gives a version to a package the managed constraints name (VD-6569).
+"""Fail a Domain change that gives a version to a package the managed constraints name.
 
 A managed package is any package in `.github/managed-constraints.txt`, the file the bundle
-delivers (ADR 0023), so this check keeps no list of its own. A pin is any version specifier
+delivers, so this check keeps no list of its own. A pin is any version specifier
 (`==`, `>=`, `~=`, `<`, `!=`, ranges) on such a package in the Domain's
 `ingestion/requirements.txt` or a vendored connector's
 `ingestion/sources/<connector>/requirements.txt`. Vibedata manages the version, and a stale
-pin makes pip refuse the install (VD-6464).
+pin makes pip refuse the install.
 
 The parsing mirrors `neutralize_requirements` in the plugin's `scripts/runtime_pins.py`: names
 compare after PEP 503 normalisation; extras, environment markers and trailing comments do not
@@ -69,7 +69,7 @@ def managed_versions(constraints_text: str) -> dict:
 
 
 def neutralize_requirements(text: str, managed: dict) -> tuple:
-    """`text` with the version dropped from every requirement on a managed package (VD-6588).
+    """`text` with the version dropped from every requirement on a managed package.
 
     Mirrors `neutralize_requirements` in the plugin's `scripts/runtime_pins.py`: the managed
     version wins, so `dlt==1.29.0` under a managed `dlt==1.30.0` is published as `dlt`. Name,

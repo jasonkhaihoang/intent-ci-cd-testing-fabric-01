@@ -1,4 +1,4 @@
-"""Preflight's Fabric capacity-grant check (AC-105) — thin shell over check_capacity_access.
+"""Preflight's Fabric capacity-grant check — thin shell over check_capacity_access.
 
 Runs inside `ci/preflight` on both Fabric lanes, after azure/login, and folds its row into
 the preflight report so the preflight comment shows it beside intent and ci-config.

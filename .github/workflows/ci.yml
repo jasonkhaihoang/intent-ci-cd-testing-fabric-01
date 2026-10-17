@@ -3,9 +3,9 @@
 # Self-contained — all scripts live in .github/scripts/ within this repo.
 # Domain configuration: .workflow/ci-config.yml.
 #
-# Authentication: GitHub OIDC — per-domain SPN, no credentials stored (AC-31).
-# Required GitHub Variables/Secrets: see ci-config.yml's *_VAR indirection keys
-# (ADR 0018) — this workflow no longer hardcodes their literal names.
+# Authentication: GitHub OIDC — per-domain SPN, no credentials stored.
+# Required GitHub Variables/Secrets: see ci-config.yml's *_VAR indirection keys —
+# this workflow no longer hardcodes their literal names.
 
 name: Ephemeral Fabric CI
 
@@ -52,8 +52,7 @@ jobs:
       llm_api_url_var: ${{ steps.preflight.outputs.LLM_API_URL_VAR }}
       llm_model_var: ${{ steps.preflight.outputs.LLM_MODEL_VAR }}
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
           fetch-depth: 0
@@ -63,8 +62,7 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -92,7 +90,6 @@ jobs:
 
       - name: Check branch sync
         id: sync
-        if: vars.FAKE_WORLD == ''
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,11 +131,10 @@ jobs:
           echo "ephemeral_name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "Ephemeral workspace name: ${NAME}"
 
-      # Capacity grant (AC-105): creating the ephemeral workspace needs permission over
+      # Capacity grant: creating the ephemeral workspace needs permission over
       # the capacity, separate from any workspace role. Checked here so a missing grant
       # fails preflight by name instead of provision with a 403 that reads like an outage.
       - name: Login — CI identity
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[steps.preflight.outputs.AZURE_TENANT_ID_VAR] }}
@@ -146,7 +142,6 @@ jobs:
           allow-no-subscriptions: true
 
       - name: Check Fabric capacity access
-        if: vars.FAKE_WORLD == '' || vars.FAKE_WORLD_FABRIC_CAPACITY != ''
         env:
           FABRIC_CAPACITY_ID: ${{ vars[steps.preflight.outputs.FABRIC_CAPACITY_ID_VAR] }}
         run: python3 ${{ env.SCRIPTS }}/fabric_capacity_check.py --report reports/preflight.json
@@ -214,7 +209,7 @@ jobs:
           EOF
 
   # ─── MANAGED REQUIREMENTS ─────────────────────────────────────────────────
-  # Standalone check (VD-6569, ADR 0023): fails the PR if ingestion/requirements.txt or a vendored
+  # Standalone check: fails the PR if ingestion/requirements.txt or a vendored
   # connector's ingestion/sources/<connector>/requirements.txt gives a version to a package the
   # delivered .github/managed-constraints.txt names. No `needs:` and no status context of its own.
   managed-requirements:
@@ -222,13 +217,11 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -236,7 +229,7 @@ jobs:
         run: python3 .github/scripts/managed_requirements_gate.py
 
   # ─── ADR NUMBERING ────────────────────────────────────────────────────────
-  # Standalone check: fails the PR if docs/adr/ has duplicate leading numbers, or
+  # Standalone check: fails the PR if the ADR directory has duplicate leading numbers, or
   # any ADR-00NN citation under docs/** has no matching file. No `needs:` — this
   # check is independent of preflight and every other gate.
   adr-numbering:
@@ -244,13 +237,11 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -338,20 +329,18 @@ jobs:
       platform_error_category: ${{ steps.fetch.outputs.category }}
       platform_error_reason: ${{ steps.fetch.outputs.reason }}
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Resolve layout
         run: |
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      # No dbt shim for this job — real dbt required on PATH. Keep unconditional.
       - run: pip install -c .github/managed-constraints.txt pyyaml dbt-core dbt-fabricspark --quiet
 
       - name: Emit Gate 1 pending
@@ -391,14 +380,14 @@ jobs:
           EOF
 
       - name: Login — CI identity (onelake mode only)
-        if: steps.parse-mode.outputs.mode == 'onelake' && vars.FAKE_WORLD == ''
+        if: steps.parse-mode.outputs.mode == 'onelake'
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
           client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
           allow-no-subscriptions: true
 
-      # VD-3225: E2E error-injection seam for onelake-mode fetch-failure
+      # E2E error-injection seam for onelake-mode fetch-failure
       # classification. Inert unless the `E2E_ONELAKE_ERROR_INJECT` repo
       # variable is explicitly set — every real domain repo leaves it unset,
       # so this step is a no-op there. Test-only.
@@ -461,7 +450,7 @@ jobs:
           retention-days: 7
 
       - name: Parse dbt project
-        # VD-4541: explicit dbt parse before manifest emission, so target/manifest.json
+        # Explicit dbt parse before manifest emission, so target/manifest.json
         # exists by construction here rather than as an implicit side effect of
         # emit_deployment_manifest.py's internal run_dbt_ls() subprocess call.
         if: steps.fetch.outcome == 'success'
@@ -489,7 +478,7 @@ jobs:
           retention-days: 30
 
       - name: Show modified set
-        # VD-2175: surface the `state:modified+` closure inline in Gate 1 logs so
+        # Surface the `state:modified+` closure inline in Gate 1 logs so
         # developers don't need to dig into the deployment manifest to see what changed.
         if: always() && steps.fetch.outputs.greenfield_fallback != 'true' && hashFiles('prod-state/manifest.json') != ''
         run: |
@@ -542,8 +531,6 @@ jobs:
   # step-level `if: always()` inside a skipped job never runs. This job needs
   # only `fetch-prod-state` and carries its own `if: always()`, so the
   # structured comment posts on every outcome, including a platform error.
-  # (VD-3225: found live — AC-14's comment never posted on any Gate 1 failure
-  # before this fix, artifact mode included.)
   gate-1-comment:
     name: "ci/state-modified+: post comment"
     # Fires only when fetch-prod-state actually concluded (success or failure) —
@@ -554,11 +541,9 @@ jobs:
     needs: [preflight, fetch-prod-state]
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -624,7 +609,7 @@ jobs:
   # ─── DESIGN DRIFT ────────────────────────────────────────────────────────────
   # Runner-side LLM gate: compares changed design records against state:modified.
   # Hard DAG gate: provision-workspace needs this job so a drift failure short-circuits
-  # the ephemeral workspace + Spark provision before any compute is spent (AC-8).
+  # the ephemeral workspace + Spark provision before any compute is spent.
   design-drift:
     name: "ci/design-drift: design records vs state:modified"
     needs: [preflight, fetch-prod-state]
@@ -636,8 +621,7 @@ jobs:
       statuses: write
       pull-requests: write
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -646,12 +630,11 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # No dbt shim for this job — real dbt required on PATH (VD-3341). Keep unconditional.
+      # No dbt shim for this job — real dbt required on PATH. Keep unconditional.
       - run: pip install -c .github/managed-constraints.txt pyyaml dbt-core dbt-fabricspark --quiet
 
       - name: Emit ci/design-drift pending
@@ -696,7 +679,7 @@ jobs:
 
       - name: Parse dbt project
         id: parse
-        # VD-5918: the parse output is kept so a parse failure can be relayed
+        # The parse output is kept so a parse failure can be relayed
         # on this gate's own status. An artifact that stops the project parsing
         # is exactly what these gates exist to judge, and it was the one case
         # where they reported nothing but "see job logs".
@@ -708,14 +691,7 @@ jobs:
       - name: Resolve changed paths
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FAKE_WORLD: ${{ vars.FAKE_WORLD }}
-        run: |
-          # Fake-world deploys a one-commit repo with no PR base: every file counts as changed.
-          if [ -n "$FAKE_WORLD" ]; then
-            find . -type f -not -path './.git/*' | sed 's|^\./||' > changed-paths.txt
-          else
-            git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD > changed-paths.txt
-          fi
+        run: git diff --name-only --diff-filter=d "$BASE_SHA"...HEAD > changed-paths.txt
 
       - name: Run design-drift gate
         id: run-gate
@@ -781,23 +757,20 @@ jobs:
       ephemeral_lakehouse_id: ${{ steps.provision.outputs.lakehouse_id }}
       lakehouse_name: ${{ steps.provision.outputs.lakehouse_name }}
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Resolve layout
         run: |
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - run: pip install pyyaml --quiet
 
       - name: Login — CI identity
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
@@ -1011,16 +984,14 @@ jobs:
     needs: [preflight]
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
       - name: Resolve layout
         run: |
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
           echo "CICFG=.workflow/ci-config.yml" >> "$GITHUB_ENV"
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -1076,7 +1047,7 @@ jobs:
           # sequence_files(), from the lint's ROOT config (./.sqlfluff) only;
           # a nearer $PROJ/.sqlfluff is applied per file, after that. So the
           # root file must carry these keys. An existing $PROJ/.sqlfluff gets
-          # them too, so it can't override the root templater (VD-6511).
+          # them too, so it can't override the root templater.
           sqlfluff_paths = [".sqlfluff"]
           proj_sqlfluff = os.path.join(proj, ".sqlfluff")
           if proj != "." and os.path.exists(proj_sqlfluff):
@@ -1316,7 +1287,7 @@ jobs:
           EOF
 
   # ─── GATE 3 — UNIT TESTS ──────────────────────────────────────────────────
-  # dbt unit tests on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  # dbt unit tests on the GHA runner via dbt-fabricspark CLI auth.
   gate-3-unit:
     name: "ci/unit-tests: unit tests"
     needs: [preflight, provision-workspace, gate-2-write]
@@ -1327,25 +1298,18 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - run: pip install pyyaml --quiet
 
       - name: Install dbt-fabricspark
-        if: vars.FAKE_WORLD == ''
         run: pip install -c .github/managed-constraints.txt dbt-core dbt-fabricspark --quiet
-
-      - name: Add fake-world dbt shim to PATH
-        if: vars.FAKE_WORLD != ''
-        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
 
       - run: mkdir -p reports
 
@@ -1354,7 +1318,6 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
 
       - name: Login — CI identity
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
@@ -1396,15 +1359,14 @@ jobs:
   gate-3-unit-comment:
     name: "gate-3-unit comment"
     needs: [preflight, gate-2-write, gate-3-unit]
-    # VD-3225 precedent (see gate-1-comment): a bare if: always() also fires on
+    # As in gate-1-comment, a bare if: always() also fires on
     # the `closed` action a merge/close triggers, when gate-3-unit is natively
     # skipped and never produced reports/gate-3.json — posting the generic
     # "did not succeed" fallback over whatever real result was already there.
     if: always() && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
@@ -1440,7 +1402,7 @@ jobs:
           PYEOF
 
   # ─── GATE 2 — ISOLATED BUILD ──────────────────────────────────────────────
-  # dbt clone + dbt run on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  # dbt clone + dbt run on the GHA runner via dbt-fabricspark CLI auth.
   gate-2-write:
     name: "ci/run: isolated build"
     needs: [preflight, provision-workspace, fetch-prod-state]
@@ -1451,25 +1413,18 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - run: pip install pyyaml --quiet
 
       - name: Install dbt-fabricspark
-        if: vars.FAKE_WORLD == ''
         run: pip install -c .github/managed-constraints.txt dbt-core dbt-fabricspark --quiet
-
-      - name: Add fake-world dbt shim to PATH
-        if: vars.FAKE_WORLD != ''
-        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
 
       - run: mkdir -p reports
 
@@ -1478,7 +1433,6 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
 
       - name: Login — CI identity
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
@@ -1539,7 +1493,7 @@ jobs:
           EOF
 
   # ─── GATE 4 — DATA TESTS ─────────────────────────────────────────────────
-  # dbt test --store-failures on the GHA runner via dbt-fabricspark CLI auth (AC-11).
+  # dbt test --store-failures on the GHA runner via dbt-fabricspark CLI auth.
   gate-4-data-test:
     name: "ci/data-tests: data tests"
     needs: [preflight, provision-workspace, gate-2-write]
@@ -1550,25 +1504,18 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - run: pip install pyyaml --quiet
 
       - name: Install dbt-fabricspark
-        if: vars.FAKE_WORLD == ''
         run: pip install -c .github/managed-constraints.txt dbt-core dbt-fabricspark --quiet
-
-      - name: Add fake-world dbt shim to PATH
-        if: vars.FAKE_WORLD != ''
-        run: echo "/fakeworld-shims" >> "$GITHUB_PATH"
 
       - run: mkdir -p reports
 
@@ -1577,7 +1524,6 @@ jobs:
           echo "PROJ=$([ -f transformation/dbt_project.yml ] && echo transformation || echo .)" >> "$GITHUB_ENV"
 
       - name: Login — CI identity
-        if: vars.FAKE_WORLD == ''
         uses: azure/login@v3
         with:
           tenant-id: ${{ vars[needs.preflight.outputs.azure_tenant_id_var] }}
@@ -1628,7 +1574,7 @@ jobs:
   gate-4-data-test-comment:
     name: "gate-4-data-test comment"
     needs: [preflight, gate-2-write, gate-4-data-test]
-    # VD-3225 precedent (see gate-1-comment): a bare if: always() also fires on
+    # As in gate-1-comment, a bare if: always() also fires on
     # the `closed` action a merge/close triggers, when gate-4-data-test is
     # natively skipped and never produced reports/gate-4.json — posting the
     # generic "did not succeed" fallback over whatever real result was already
@@ -1636,8 +1582,7 @@ jobs:
     if: always() && github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref }}
 
@@ -1673,7 +1618,7 @@ jobs:
           EOF
 
   # ─── STATUS SWEEP ─────────────────────────────────────────────────────────────
-  # VD-5918: a job that never runs posts no commit status, so its required
+  # A job that never runs posts no commit status, so its required
   # context stays pending for ever — branch protection blocks the merge and the
   # PR never states why. This job runs on every outcome and posts a terminal
   # failure for each required gate that did not conclude, naming the gates that
@@ -1687,11 +1632,9 @@ jobs:
       contents: read
       statuses: write
     steps:
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/checkout@v5
+      - uses: actions/checkout@v5
 
-      - if: vars.FAKE_WORLD == ''
-        uses: actions/setup-python@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
