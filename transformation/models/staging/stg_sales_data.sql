@@ -1,3 +1,4 @@
+-- VD-6962 validation bump
 -- Model: stg_sales_data
 -- Grain: one row per sale transaction.
 -- Source: {{ ref('sales_data') }} seed
