@@ -387,6 +387,17 @@ jobs:
           client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
           allow-no-subscriptions: true
 
+      - name: E2E onelake error injection (test-only)
+        run: |
+          mkdir -p /tmp/az_shim
+          cat > /tmp/az_shim/az <<'SHEOF'
+          #!/usr/bin/env bash
+          echo "az: injected auth failure (E2E test)" >&2
+          exit 1
+          SHEOF
+          chmod +x /tmp/az_shim/az
+          echo "/tmp/az_shim" >> "$GITHUB_PATH"
+
       - name: Fetch prod state
         id: fetch
         env:
