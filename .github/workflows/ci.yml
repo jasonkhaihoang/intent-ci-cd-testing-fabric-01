@@ -387,6 +387,28 @@ jobs:
           client-id: ${{ vars[needs.preflight.outputs.azure_client_id_var] }}
           allow-no-subscriptions: true
 
+      - name: E2E onelake error injection (test-only)
+        run: |
+          cat > /tmp/onelake_stub_server.py <<'PYEOF'
+          import http.server
+          STATUS = 401
+          class Handler(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(STATUS)
+                  self.send_header("Content-Type", "application/json")
+                  self.end_headers()
+                  self.wfile.write(b'{"error":"injected"}')
+              def log_message(self, *a):
+                  pass
+          http.server.HTTPServer(("127.0.0.1", 8899), Handler).serve_forever()
+          PYEOF
+          nohup python3 /tmp/onelake_stub_server.py >/tmp/onelake_stub.log 2>&1 &
+          for i in $(seq 1 20); do
+            python3 -c "import socket; socket.create_connection(('127.0.0.1', 8899), timeout=0.5).close()" 2>/dev/null && break
+            sleep 0.25
+          done
+          echo "ONELAKE_DFS_BASE_URL=http://127.0.0.1:8899" >> "$GITHUB_ENV"
+
       - name: Fetch prod state
         id: fetch
         env:
